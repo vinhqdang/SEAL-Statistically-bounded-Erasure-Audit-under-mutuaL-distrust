@@ -66,8 +66,67 @@ erasure request audited by the regulator. 20 Monte-Carlo trials.
 
 ## MNIST -- standard unlearning-literature benchmark
 
-(filled in once `results/mnist_summary.csv` is available -- see that file
-and `results/mnist_pareto.png` for the full numbers.)
+5-client federation, multinomial softmax on a 5,000-sample MNIST subset
+(784-dim pixel features, 10 classes), one client's erasure request. 12
+Monte-Carlo trials.
+
+| method | epsilon | leakage (attack AUC) | power vs. lazy | power vs. spoof |
+|---|---|---|---|---|
+| parameter-diff | -- | 0.500 (by construction) | 0.597 | 1.000 |
+| unrestricted behavioral (Tang et al.-style) | inf (unbounded) | 0.520 | **0.500** | 1.000 |
+| SEAL | 0.05 | 0.526 | **1.000** | 0.542 |
+| SEAL | 0.50 | 0.526 | **1.000** | 0.556 |
+| SEAL | 1.0 | 0.526 | **1.000** | 0.556 |
+| SEAL | 4.0 | 0.526 | **1.000** | 0.653 |
+| SEAL | 1e6 (no noise) | 0.527 | **1.000** | 1.000 |
+
+**Reading this table:** at higher input dimension the gap is sharper than
+on German Credit. Against a server that ignores the request,
+**unrestricted behavioral auditing performs at exactly chance (0.500)** --
+broad queries over a 784-dim retained population dilute the specific
+signal from one client's ~50 forgotten records into noise -- and
+parameter-diff does little better (0.597). SEAL's zero-cost own-data
+channel gets perfect detection power (1.000) at zero retained-set privacy
+cost, because it never has to find the signal in a huge retained
+population: it only has to notice that its own, previously-possessed
+records did not get harder for the model to fit. Against targeted
+spoofing, SEAL again shows the designed tradeoff, power climbing from
+0.54 (tight budget) to 1.0 (unbounded) as epsilon relaxes.
+
+The certificate's calibrated decision (`flag_rate_*` columns) tracks the
+underlying channel-A statistic well here (0.917 flag rate against "lazy"
+vs. 0.083 false-accusation rate on honest runs, close to the
+`beta_target=0.05` design target) -- calibration is far better-behaved at
+this scale than on the much smaller German Credit forget-set. Channel B's
+flag rate, however, does **not** track its own Monte-Carlo power (it stays
+around 0.08 and drops to 0 at the epsilon values where the raw statistic
+says power is highest). This is a real, honestly-reported limitation of
+the current Bonferroni-corrected z-test calibrated from only
+`n_calib_reps=15-25` replicates: the null's mean and standard deviation
+are themselves estimated with non-trivial noise at this sample size, and
+the one-sided threshold is conservative by construction. The underlying
+signal (Monte-Carlo AUC) behaves exactly as the theory predicts; turning
+it into a well-calibrated single-instance decision at this replicate
+budget needs either more calibration replicates or a finite-sample
+correction (e.g. a Welch/t-based threshold) rather than the plug-in
+z-test used here -- left as the most concrete next step.
+
+## Honest summary
+
+* The **impossibility results this project targets are reproduced
+  empirically**: parameter distance and an unrestricted behavioral audit
+  both perform near chance against a server that quietly ignores the
+  erasure request, especially at higher input dimension (MNIST).
+* **SEAL's zero-cost channel alone already dominates both baselines** on
+  that case, at literally zero accounted retained-set privacy cost.
+* **SEAL's tunable channel exposes the designed power/leakage tradeoff**
+  for the harder, targeted-spoofing adversary that the zero-cost channel
+  cannot catch by itself.
+* **The single-instance certificate decision is currently the weakest
+  link**, not the underlying statistics -- it needs more calibration
+  replicates or a finite-sample-corrected threshold before it should be
+  read as a production-ready accept/reject certificate rather than a
+  research prototype of the mechanism.
 
 ## Reproducing
 

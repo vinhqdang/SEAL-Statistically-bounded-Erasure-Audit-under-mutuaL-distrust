@@ -33,6 +33,34 @@ against the standard image-classification benchmark used throughout the
 unlearning literature (MNIST) so it is compared to SOTA baselines on the same
 class of benchmark those baselines were designed for.
 
+## Results at a glance
+
+Full tables, plots, and discussion are in `docs/RESULTS.md`; raw data in
+`results/`. Headline findings from the German Credit (bank consortium RTBF)
+and MNIST (standard unlearning-literature benchmark) runs:
+
+* **The impossibility results this project targets reproduce empirically.**
+  Against a server that quietly ignores the erasure request, both
+  parameter-diff and an unrestricted behavioral audit perform at or near
+  chance (as low as exactly 0.500 AUC on MNIST) -- neither can reliably
+  tell "honestly forgot" from "kept training on everything" from the model
+  alone.
+* **SEAL's zero-cost channel (the data owner's own forgotten records, no
+  privacy budget spent at all) already dominates both baselines** on that
+  case: 0.92 detection power on German Credit, 1.00 on MNIST, at literally
+  zero accounted retained-set privacy cost.
+* **SEAL's tunable channel exposes the designed power/leakage tradeoff**
+  against the harder, targeted-spoofing adversary the zero-cost channel
+  alone cannot catch: detection power rises smoothly from ~0.53-0.54 at a
+  tight epsilon budget to 1.00 as the budget is relaxed, on both datasets.
+* **Honestly reported limitation:** the calibrated single-instance
+  accept/reject decision is currently the weakest link, not the underlying
+  statistics -- it needs more calibration replicates or a finite-sample-
+  corrected threshold before it should be read as a production-ready
+  certificate rather than a research prototype of the mechanism. See
+  `docs/RESULTS.md` for the full account, including where the certificate's
+  flag rate does and does not track the raw statistic's power.
+
 ## Layout
 
 ```

@@ -4,3 +4,6 @@ scikit-learn
 pandas
 matplotlib
 pytest
+torch
+transformers
+phe

@@ -61,6 +61,40 @@ and MNIST (standard unlearning-literature benchmark) runs:
   `docs/RESULTS.md` for the full account, including where the certificate's
   flag rate does and does not track the raw statistic's power.
 
+A second, independent LLM-unlearning track (`seal_llm/`) applies the same
+mutual-distrust audit idea to fine-tuned language models instead of
+federated classifiers -- see "The LLM track" below and `docs/RESULTS_LLM.md`
+for its own results at a glance.
+
+## The LLM track (`seal_llm/`)
+
+A second, independent instantiation of the same mutual-distrust idea for
+LLM unlearning: a data owner watermarks its contribution (Kirchenbauer et
+al., ICML 2023) before it enters training, then audits a "we forgot your
+data" claim from a model owner it does not trust using a real Paillier-PIR
+oblivious batch with canaries -- built specifically to survive a server
+that recognizes and filters the audit check itself, a problem the closest
+prior work (WaterDrum) names as open in its own Appendix D. See
+`docs/ALGORITHM_LLM.md` for the protocol and `docs/RESULTS_LLM.md` for the
+numbers from an end-to-end run on distilgpt2. Headline results:
+
+* Against a server that never removes the author's influence and instead
+  filters output for the one exact known audit-trigger string, a naive
+  audit that only ever asks that one prompt is fooled completely -- the
+  real protocol, which never uses that literal string, is not.
+* Against a smarter server that recognizes the TOPIC and suppresses every
+  phrasing uniformly, a slot-hiding defense alone (which query is checked)
+  buys nothing -- a separate response-diversity channel is what catches it.
+* Against a resource-bounded server that can only guess a subset of likely
+  phrasings to fake, a real-cluster of independently-paraphrased queries
+  with one checked at random turns detection into the kind of
+  hypergeometric guessing game this repository can actually derive a
+  formula for and check empirically.
+
+`docs/RESULTS_LLM.md` also states plainly what this does not show,
+including the sample-size and calibration-noise caveats analogous to the
+classical track's `docs/RESULTS.md`.
+
 ## Layout
 
 ```
@@ -73,10 +107,20 @@ seal/
   metrics.py        Monte-Carlo detection power; empirical retained-set leakage (loss-based MIA proxy)
   data.py           dataset loading + population split (train / calibration / holdout pools)
   evaluate.py       experiment orchestration (Monte-Carlo trials, epsilon sweep, Pareto summary)
+seal_llm/
+  watermark.py      Kirchenbauer et al. green/red-list LLM watermark: biased generation + z-test detection
+  pir.py            real single-server PIR over Paillier homomorphic encryption (phe)
+  data.py           fictitious (TOFU-style) author profiles, watermarked documents, paraphrase templates
+  model.py          distilgpt2 fine-tuning / generation utilities
+  mechanisms.py     honest unlearn / lazy / naive exact-match filter / topic filter / partial topic filter
+  certificate.py    SEAL-W: real-cluster + diversity-channel certificate, real PIR retrieval, calibrated decision
 scripts/
-  run_experiments.py   runs the full comparison on both datasets, writes results/*.csv, results/*.png
-tests/                 unit tests for the privacy accounting and the certificate logic
-docs/ALGORITHM.md       formal protocol spec, novelty discussion, privacy proof, known pitfalls
+  run_experiments.py     runs the classical-track comparison on both datasets, writes results/*.csv, results/*.png
+  run_llm_experiment.py  runs the LLM-track SEAL-W experiment, writes results/llm_watermark_*.csv
+tests/                 unit tests for the privacy accounting, certificate logic, PIR, and watermark
+docs/ALGORITHM.md       classical-track formal protocol spec, novelty discussion, privacy proof, known pitfalls
+docs/ALGORITHM_LLM.md   LLM-track protocol spec: threat model, novelty accounting, hypergeometric bound
+docs/RESULTS_LLM.md     LLM-track results: honest numbers from an end-to-end distilgpt2 run
 results/                generated CSVs and plots from the last run
 ```
 
@@ -85,7 +129,8 @@ results/                generated CSVs and plots from the last run
 ```
 pip install -r requirements.txt
 python3 -m pytest tests/ -q
-python3 scripts/run_experiments.py
+python3 scripts/run_experiments.py       # classical (federated) track
+python3 scripts/run_llm_experiment.py    # LLM track (fine-tunes distilgpt2 several times; CPU, ~1 hour)
 ```
 
 This trains a small federated classifier on each dataset, simulates an

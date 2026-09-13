@@ -1,12 +1,27 @@
 import numpy as np
 import pytest
+from scipy import stats
 
 from seal_llm.certificate import (
     Candidate, CommittedBatch, RawAuditStats, decide, evaluate_batch,
     build_candidate_batch, evasion_probability, Z_SCALE, FINGERPRINT_BITS,
+    _predictive_quantile,
 )
 from seal_llm.data import PARAPHRASE_TEMPLATES
 from seal_llm.pir import keygen
+
+
+def test_predictive_quantile_exceeds_z_quantile_and_converges():
+    """Same exact-finite-sample correction as seal/certificate.py -- see
+    that module's docstring for the full derivation. Checked independently
+    here since seal_llm's copy is a separate implementation, not a shared
+    import, and this project's own LLM-track run is exactly the small-m
+    regime (n_calib_reps as low as 2) where the correction matters most."""
+    beta = 0.10  # this track's BETA_TARGET
+    z = stats.norm.ppf(1 - beta)
+    for m in [2, 3, 6, 50]:
+        assert _predictive_quantile(beta, m) > z
+    assert _predictive_quantile(beta, 100_000) == pytest.approx(z, abs=0.01)
 
 
 @pytest.fixture(scope="module")

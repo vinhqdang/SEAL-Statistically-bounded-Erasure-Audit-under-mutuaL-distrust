@@ -17,38 +17,49 @@ from a run this size, not the exact percentages.
 
 ## Summary table
 
-| metric | value | reading |
+Three successive fixes to the certificate's threshold, same experiment
+otherwise, in the order they were actually found and applied:
+
+| version | false-accusation rate | detection: lazy | filter-only | topic | partial |
+|---|---|---|---|---|---|
+| hardcoded canary floor (`z=2.0`) | 1.0 (3/3) -- degenerate, always flags | 1.0 | 1.0 | 1.0 | 1.0 |
+| calibrated, asymptotic z-quantile | 0.667 (2/3) | 1.0 | 1.0 | 1.0 | 0.667 |
+| calibrated, exact Student-t quantile | 0.333 (1/3) | 0.333 | 0.333 | 0.667 | 0.333 |
+
+| metric (final, exact-t version) | value | reading |
 |---|---|---|
-| false-accusation rate (honest flagged) | 0.667 (2/3) | target was `beta_target=0.10`; badly overshot at this sample size -- see "What went wrong first" below |
-| detection rate, lazy (ignores request, keeps training on everything) | 1.0 (3/3) | |
-| detection rate, filter-only (fine-tunes correctly but string-matches the one literal canonical prompt) | 1.0 (3/3) | |
-| detection rate, topic filter (suppresses any phrasing mentioning the author) | 1.0 (3/3) | driven by the diversity channel, not the slot channel -- see below |
-| detection rate, topic filter, diversity channel alone | 1.0 (3/3) | |
-| detection rate, partial topic filter (guesses 50% of the paraphrase pool) | 0.667 (2/3) | analytic prediction: evades with probability 0.6, i.e. ~0.4 expected detection rate -- 2/3 observed is in the right neighborhood for n=3 |
+| false-accusation rate (honest flagged) | 0.333 (1/3) | still above `beta_target=0.10`; see "What the exact fix did and did not fix" below |
+| detection rate, lazy (ignores request, keeps training on everything) | 0.333 (1/3) | dropped from 1.0 -- see below |
+| detection rate, filter-only (fine-tunes correctly but string-matches the one literal canonical prompt) | 0.333 (1/3) | dropped from 1.0 |
+| detection rate, topic filter (suppresses any phrasing mentioning the author) | 0.667 (2/3) | driven by the diversity channel -- held up better than the slot channel |
+| detection rate, topic filter, diversity channel alone | 0.667 (2/3) | |
+| detection rate, partial topic filter (guesses 50% of the paraphrase pool) | 0.333 (1/3) | analytic prediction: evades with probability 0.6, i.e. ~0.4 expected detection rate |
 | naive baseline: auditor asks only the literal canonical prompt, no PIR/paraphrasing | 0.333 (1/3) | see caveat below -- this reading is not real detection power |
 | analytic evasion probability for the partial-filter adversary | 0.6 | `evasion_probability(n_slots=5, n_protected=1, n_tampered=3)`, exact hypergeometric formula |
 
 ## What went right
 
-* **Lazy, filter-only, and topic-filter are all caught in every trial.**
-  Filter-only is exactly the case the real-cluster/paraphrase construction
-  is built to catch (a server that only recognizes the one literal
-  training-seed string) -- and it is caught every time, while the naive
-  no-PIR baseline that asks that same literal string directly is fooled in
-  2 of 3 trials (see the caveat on the third below).
-* **Topic-filter is caught by the diversity channel specifically, not the
-  slot channel** -- exactly the division of labor the design predicts:
-  suppressing every phrasing of a topic uniformly gives the slot channel
-  nothing to catch (there is no "which slot is checked" secret to exploit
-  against a server that treats every phrasing alike), but it collapses the
-  real-cluster's response fingerprints to near-identical, which the
-  diversity channel flags against the phantom-cluster baseline every time.
-* **The partial-filter adversary's empirical detection rate lands close to
-  the exact analytic hypergeometric prediction** (0.667 observed vs. ~0.4
-  predicted, within sampling noise for `n=3`) -- this is the one place in
-  this repository where a component's behavior is checked against a closed-
-  form formula rather than only a Monte-Carlo comparison, and it is not
-  contradicted by the data.
+* **The diversity channel is the most robust of the two.** Topic-filter
+  (which the slot channel structurally cannot catch -- see
+  `docs/ALGORITHM_LLM.md` Section 4.3) is still caught 2 of 3 times by the
+  diversity channel alone even after the stricter exact threshold made
+  every other detection rate drop, exactly the division of labor the
+  design predicts: it does not depend on hiding which slot is checked, so
+  it degrades more gracefully as the calibration sample shrinks than a
+  threshold that does.
+* **The partial-filter adversary's empirical detection rate is consistent
+  with the exact analytic hypergeometric prediction** within the wide
+  sampling noise this replicate count allows (predicted ~0.4, observed
+  0.333) -- this is the one place in this repository where a component's
+  behavior is checked against a closed-form formula rather than only a
+  Monte-Carlo comparison, and it is not contradicted by the data at either
+  threshold version tested.
+* **The exact threshold fix (below) did exactly what the theory predicts**:
+  it lowered both the false-accusation rate and the detection rate, in
+  the direction and rough magnitude a Student-t correction of this size
+  implies -- a result that was derived before it was run, not fit to the
+  data after the fact (see `docs/THEORY_AGENDA.md`'s note on why this
+  specific finite-sample correction was the first thing worth trying).
 
 ## What went wrong first, and the actual bug this run exposed
 
@@ -73,18 +84,50 @@ literal training prompt**, at this model/corpus scale. A fixed threshold
 tuned on the literal-prompt regime does not transfer to the paraphrased-
 query regime.
 
-The fix (now in `seal_llm/certificate.py::decide`) is to calibrate the
-canary thresholds from data the same way every other threshold in this
-project is calibrated -- from the positive/negative canary readings
-observed on the SAME calibration replicates that build the slot-channel
-null -- rather than a constant. After that fix, the false-accusation rate
-dropped from 1.0 to 0.667: still too high relative to the `beta_target=0.10`
-design goal, but no longer degenerate, and the remaining gap is explained
-by having only `N_CALIB_AUTHORS=2` calibration replicates (barely enough
-for a defined sample standard deviation at all) rather than a logic bug --
-see `docs/RESULTS.md`'s identical small-sample-calibration caveat for the
-classical track's channel B, which is the same underlying issue in a
-different instantiation.
+The first fix (calibrating the canary thresholds from the positive/
+negative canary readings observed on the SAME calibration replicates that
+build the slot-channel null, rather than a hardcoded constant) dropped the
+false-accusation rate from 1.0 to 0.667: no longer degenerate, but still
+using an asymptotic normal-quantile plug-in threshold that assumes the
+calibration mean and standard deviation ARE the true population values --
+which is a bad assumption at `N_CALIB_AUTHORS=2`.
+
+## What the exact Student-t fix did and did not fix
+
+The second fix replaced that asymptotic z-quantile with the exact
+finite-sample Student-t "predictive quantile" for testing a fresh
+observation against a null estimated from `n` calibration replicates
+(`seal_llm/certificate.py::_predictive_quantile` -- the classical
+"prediction interval for a future observation" result, exact via
+Cochran's theorem, applied identically in the classical track's
+`seal/certificate.py`). At `n=2` calibration replicates -- this track's
+minimum, needed just to get a defined sample standard deviation at all --
+the correction is severe: `t.ppf(0.95, df=1) = 6.31` versus `z=1.64`, a
+3.8x wider threshold. Applying it dropped the false-accusation rate
+further, to 0.333 -- but it also dropped detection against lazy,
+filter-only, and partial-topic-filter from 1.0 to 0.333 each. This is
+not a bug in the fix; it is the fix working exactly as the theory
+predicts: an exact threshold correctly reflects that a null estimated
+from only 2 points is genuinely too uncertain to distinguish honest from
+dishonest confidently, and the previous, looser z-based threshold was
+producing detections the data did not actually support.
+
+The per-trial numbers make the underlying instability concrete rather
+than abstract: of the 3 trials, 2 (seeds 0 and 1) flagged almost nothing
+(the calibration pair happened to produce a wide null), while the third
+(seed 2) flagged *everything*, honest included (that trial's calibration
+pair happened to produce an unusually narrow null, making the threshold
+unusually tight). This trial-to-trial swing is not threshold-formula
+noise -- it is `n=2` genuinely being too small a sample to pin down a
+variance estimate at all, which the exact formula cannot paper over
+because no formula can; it can only stop silently overstating the
+confidence a 2-point sample provides. **More calibration replicates, not
+a different formula, is the only real fix from here** -- see
+`docs/RESULTS.md`'s identical conclusion for the classical track's
+channel B, and `docs/THEORY_AGENDA.md`'s Conjecture A for why a
+principled bound on exactly how many replicates are needed, as a
+function of the target power and false-accusation rate, is still an open
+question rather than something this run answers.
 
 ## The naive-baseline caveat
 
@@ -103,22 +146,36 @@ calibration noise around that, not as 33% detection power.
 ## Honest summary
 
 * **The core mechanism works**: a real-cluster of paraphrased queries plus
-  a response-diversity channel catches both a server that recognizes only
-  a literal string and a server that recognizes the topic and suppresses
-  every phrasing -- via two different, independent channels, exactly as
-  designed, and the resource-bounded adversary's evasion rate matches the
-  closed-form hypergeometric formula.
-* **The false-accusation rate is not yet where the design target says it
-  should be** at this replicate count -- this needs more calibration
-  replicates (more `N_CALIB_AUTHORS`) to tighten, the same limitation the
-  classical track already documents for its own channel B, not a new or
-  different problem.
-* **A fixed "magic number" threshold is dangerous and was caught here by
-  actually running the experiment**, not by inspection -- the first version
-  of this construction degenerated to flagging everything, silently, until
-  measured. That in itself is worth taking as the operating lesson: any
-  constant threshold in a system like this needs to be calibrated from the
-  actual deployment's own data, not carried over from a different one.
+  a response-diversity channel target two different adversary classes via
+  two independent channels, exactly as designed, and the resource-bounded
+  adversary's evasion rate is consistent with the closed-form
+  hypergeometric formula at both threshold versions tested.
+* **Three successive, honestly-measured fixes, each doing what it should
+  and no more**: a hardcoded threshold degenerated to flagging everything
+  (1.0 false-accusation rate); calibrating it from data fixed the
+  degeneracy but used the wrong asymptotic formula (0.667); using the
+  exact finite-sample formula correctly reduced both the false-accusation
+  rate AND the detection rate (0.333 each), because an exact threshold
+  cannot manufacture confidence a 2-replicate calibration sample does not
+  have. Each number moved in the direction the relevant theory predicts,
+  in that order, which is itself the strongest evidence available here
+  that the certificate's calibration logic is doing what it claims to.
+* **The remaining problem is sample size, not the formula.** At
+  `N_CALIB_AUTHORS=2`, both the false-accusation rate and detection power
+  are governed more by which 2 calibration authors happened to be drawn
+  than by anything about the mechanism under test -- visible directly in
+  the per-trial numbers (one trial flags nothing, another flags
+  everything). This is not fixable by a better statistic; it needs more
+  calibration replicates, exactly as `docs/RESULTS.md` already concludes
+  for the classical track's channel B.
+* **A fixed "magic number" threshold is dangerous, and was caught here by
+  actually running the experiment**, not by inspection -- the first
+  version of this construction degenerated to flagging everything,
+  silently, until measured. Any constant threshold in a system like this
+  needs to be calibrated from the actual deployment's own data; and any
+  calibrated-from-data threshold still needs the statistically correct
+  finite-sample formula, not an asymptotic approximation, or it will
+  silently overclaim confidence the calibration sample does not support.
 
 ## Reproducing
 

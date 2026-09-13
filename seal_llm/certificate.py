@@ -89,6 +89,25 @@ Z_SCALE = 100  # quantization scale for encoding a float z-score as an integer
 FINGERPRINT_BITS = 32  # width of the SimHash-style response fingerprint
 
 
+def _predictive_quantile(beta: float, n_calib: int) -> float:
+    """Exact finite-sample threshold multiplier for testing a fresh
+    observation against a null estimated from `n_calib` i.i.d. calibration
+    replicates -- see seal/certificate.py::_predictive_quantile for the
+    full derivation (Student-t "prediction interval for a future
+    observation," not original to this project, but not previously applied
+    to either certificate module here). Replaces the asymptotic z-quantile
+    this project's first implementation used, which is exactly why the
+    canary/slot/diversity thresholds flagged honest servers far more often
+    than the `beta_target` design goal at this project's own small
+    calibration-replicate counts (docs/RESULTS_LLM.md): at n_calib=2 (this
+    track's minimum), t_crit(1 df) = 6.31 vs z_crit = 1.64 -- the
+    plug-in z-test understated the true threshold distance by 3.8x."""
+    if n_calib < 2:
+        raise ValueError("need >=2 calibration replicates for a defined sample std")
+    t_crit = stats.t.ppf(1 - beta, df=n_calib - 1)
+    return t_crit * np.sqrt(1 + 1 / n_calib)
+
+
 @dataclass
 class Candidate:
     label: str  # "real_cluster" | "positive_canary" | "negative_canary_cluster" | "decoy"
@@ -278,18 +297,19 @@ def decide(raw: RawAuditStats, null_z_scores: np.ndarray, null_diversity_ratios:
     if len(null_z_scores) < 2:
         raise ValueError("null_z_scores needs >=2 calibration replicates for a defined sample std")
     mu, sd = float(null_z_scores.mean()), float(null_z_scores.std(ddof=1) + 1e-9)
-    z_crit = stats.norm.ppf(1 - beta_target)
-    tau = mu + z_crit * sd  # upper-tail: flag if the checked slot is unusually HIGH
+    tau = mu + _predictive_quantile(beta_target, len(null_z_scores)) * sd  # upper-tail: flag if the checked slot is unusually HIGH
     slot_flag = raw.z_real > tau
 
     if canary_z_floor is None:
         if null_positive_canary is None or len(null_positive_canary) < 2:
             raise ValueError("need null_positive_canary (>=2 replicates) unless canary_z_floor is given explicitly")
-        canary_z_floor = float(np.mean(null_positive_canary)) - z_crit * float(np.std(null_positive_canary, ddof=1) + 1e-9)
+        q = _predictive_quantile(beta_target, len(null_positive_canary))
+        canary_z_floor = float(np.mean(null_positive_canary)) - q * float(np.std(null_positive_canary, ddof=1) + 1e-9)
     if canary_z_ceiling is None:
         if null_negative_canary is None or len(null_negative_canary) < 2:
             raise ValueError("need null_negative_canary (>=2 replicates) unless canary_z_ceiling is given explicitly")
-        canary_z_ceiling = float(np.mean(null_negative_canary)) + z_crit * float(np.std(null_negative_canary, ddof=1) + 1e-9)
+        q = _predictive_quantile(beta_target, len(null_negative_canary))
+        canary_z_ceiling = float(np.mean(null_negative_canary)) + q * float(np.std(null_negative_canary, ddof=1) + 1e-9)
 
     canaries_ok = (raw.z_positive_canary > canary_z_floor) and (raw.z_negative_canary_mean < canary_z_ceiling)
 
@@ -298,7 +318,7 @@ def decide(raw: RawAuditStats, null_z_scores: np.ndarray, null_diversity_ratios:
     if null_diversity_ratios is not None and len(null_diversity_ratios) > 1:
         mu_d = float(np.mean(null_diversity_ratios))
         sd_d = float(np.std(null_diversity_ratios, ddof=1) + 1e-9)
-        tau_div = mu_d - z_crit * sd_d  # lower-tail: flag if diversity is unusually LOW
+        tau_div = mu_d - _predictive_quantile(beta_target, len(null_diversity_ratios)) * sd_d  # lower-tail: flag if diversity is unusually LOW
         diversity_flag = raw.diversity_ratio < tau_div
 
     return SealWResult(

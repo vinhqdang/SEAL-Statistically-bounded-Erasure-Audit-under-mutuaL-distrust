@@ -1,9 +1,44 @@
 import numpy as np
+import pytest
+from scipy import stats
 
 from seal.flmodel import FederatedSoftmax
 from seal.mechanisms import honest_finetune_unlearn, dishonest_lazy, dishonest_spoof
-from seal.certificate import SealCertificate, build_calibration_replicates
+from seal.certificate import SealCertificate, build_calibration_replicates, _predictive_quantile
 from seal.metrics import detection_power
+
+
+def test_predictive_quantile_exceeds_asymptotic_z_quantile_at_finite_m():
+    """The exact finite-sample (Student-t, 'prediction interval for a
+    future observation') threshold must be strictly wider than the
+    asymptotic z-quantile plug-in test previously used, at every finite
+    calibration-replicate count -- the z-test silently understates the
+    true threshold whenever the null's mean/std are themselves estimated
+    from finite data, which is always true here."""
+    beta = 0.05
+    z = stats.norm.ppf(1 - beta)
+    for m in [2, 3, 5, 10, 25, 100]:
+        q = _predictive_quantile(beta, m)
+        assert q > z, f"predictive quantile at m={m} should exceed the asymptotic z quantile"
+
+
+def test_predictive_quantile_converges_to_z_quantile_as_m_grows():
+    beta = 0.05
+    z = stats.norm.ppf(1 - beta)
+    q_small = _predictive_quantile(beta, 3)
+    q_large = _predictive_quantile(beta, 100_000)
+    assert q_small - z > q_large - z > 0
+    assert q_large == pytest.approx(z, abs=0.01)
+
+
+def test_predictive_quantile_matches_hand_derived_formula_at_m_equals_2():
+    # t_crit(1 df, 0.95) = 6.3138 exactly (a classical, tabulated value);
+    # the extra sqrt(1 + 1/m) factor for m=2 is sqrt(1.5).
+    beta = 0.05
+    q = _predictive_quantile(beta, 2)
+    expected = stats.t.ppf(0.95, df=1) * np.sqrt(1.5)
+    assert q == pytest.approx(expected, rel=1e-9)
+    assert expected == pytest.approx(6.3138 * 1.224745, rel=1e-3)
 
 
 def _toy_federation(seed=0, n_per_client=800, k=4, d=6, c=2):

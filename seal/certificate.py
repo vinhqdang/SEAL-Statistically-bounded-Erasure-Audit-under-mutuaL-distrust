@@ -36,6 +36,38 @@ from .flmodel import FederatedSoftmax, Params
 from .privacy import PrivacyBudget, calibrate_sigma
 
 
+def _predictive_quantile(beta: float, n_calib: int) -> float:
+    """The exact finite-sample threshold multiplier for testing a fresh
+    observation against a null estimated from `n_calib` i.i.d. calibration
+    replicates, instead of the asymptotic z-quantile `stats.norm.ppf(1-beta)`
+    that assumes the calibration mean/std are the true population values.
+
+    If the n_calib replicates and the real audited statistic are i.i.d.
+    N(mu, sigma^2) under the null, then by Cochran's theorem the sample
+    mean and sample variance of the replicates are independent, so
+
+        (T_new - mean(replicates)) / (std(replicates) * sqrt(1 + 1/n_calib))
+
+    is exactly Student-t distributed with (n_calib - 1) degrees of freedom
+    -- not standard normal -- because it is the ratio of a normal variate
+    to an independent (scaled) chi-distributed one (this is the classical
+    "prediction interval for a future observation" result, not something
+    original to this project). Substituting the t-quantile here, scaled by
+    sqrt(1 + 1/n_calib), gives EXACT Type-I error control at the stated
+    beta under that Gaussian idealization; the z-quantile plug-in this
+    project used previously does not, and understates the true threshold
+    distance most severely at the small calibration-replicate counts this
+    project's own experiments actually ran with (e.g. n_calib=2 in the LLM
+    track: t_crit(1 df) = 6.31 vs z_crit = 1.64, a 3.8x difference) --
+    which is the exact, provable explanation for the excess false-
+    accusation rate documented in docs/RESULTS.md and docs/RESULTS_LLM.md.
+    """
+    if n_calib < 2:
+        raise ValueError("need >=2 calibration replicates for a defined sample std")
+    t_crit = stats.t.ppf(1 - beta, df=n_calib - 1)
+    return t_crit * np.sqrt(1 + 1 / n_calib)
+
+
 @dataclass
 class ChannelStats:
     lam: float
@@ -172,9 +204,8 @@ class SealCertificate:
         mu_a, sd_a = float(null_a.mean()), float(null_a.std(ddof=1) + 1e-9)
         mu_b, sd_b = float(null_b.mean()), float(null_b.std(ddof=1) + 1e-9)
 
-        z_crit = stats.norm.ppf(1 - beta_per_channel)
-        tau_a = mu_a - z_crit * sd_a
-        tau_b = mu_b - z_crit * sd_b
+        tau_a = mu_a - _predictive_quantile(beta_per_channel, len(null_a)) * sd_a
+        tau_b = mu_b - _predictive_quantile(beta_per_channel, len(null_b)) * sd_b
 
         lam_a = _loss_gap(self.model, forget_X, forget_y, before, after)
         Xp, yp = make_probes(forget_X, forget_y, self.n_probes, self.jitter, seed=seed + 1)

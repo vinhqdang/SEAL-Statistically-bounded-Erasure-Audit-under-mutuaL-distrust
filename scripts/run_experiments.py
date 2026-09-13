@@ -18,7 +18,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from seal.data import load_german_credit, load_mnist_subset
+from seal.data import load_german_credit, load_mnist_subset, load_covertype
 from seal.evaluate import TrialConfig, run_sweep, summarize
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
@@ -83,6 +83,19 @@ def main() -> None:
         n_probes=50, jitter=0.05, l_max=8.0, beta_target=0.05, delta_audit=1e-5, n_neighbors_leak=3,
     )
     run_dataset("mnist", load_mnist_subset(n_samples=5000), mnist_cfg, n_trials=12)
+
+    # Two orders of magnitude bigger than German Credit's 1,000 rows: real
+    # per-client shards of tens of thousands of rows each, not a few
+    # hundred. Larger batch_size keeps the number of SGD steps -- the
+    # actual driver of wall-clock time, not raw row count, since numpy
+    # vectorizes each mini-batch -- comparable to the smaller datasets.
+    covertype_cfg = TrialConfig(
+        k_clients=5, forget_client=0, forget_frac=0.1, calib_frac=0.15, holdout_frac=0.15,
+        fl_rounds=20, local_epochs=1, lr=0.3, batch_size=512, unlearn_extra_rounds=6,
+        spoof_epochs=30, spoof_lr=0.5, n_calib_reps=12, n_query_unrestricted=60,
+        n_probes=50, jitter=0.3, l_max=8.0, beta_target=0.05, delta_audit=1e-5, n_neighbors_leak=3,
+    )
+    run_dataset("covertype", load_covertype(n_samples=150_000), covertype_cfg, n_trials=10)
 
 
 if __name__ == "__main__":

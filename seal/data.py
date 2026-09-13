@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from sklearn.datasets import fetch_openml
+from sklearn.datasets import fetch_openml, fetch_covtype
 from sklearn.preprocessing import StandardScaler
 
 
@@ -55,6 +55,24 @@ def load_mnist_subset(n_samples: int = 9000, seed: int = 0) -> Population:
     rng = np.random.default_rng(seed)
     idx = rng.choice(len(X_full), size=n_samples, replace=False)
     return Population("mnist", X_full[idx], y_full[idx], n_features=X_full.shape[1], n_classes=10)
+
+
+def load_covertype(n_samples: int | None = None, seed: int = 0) -> Population:
+    """UCI Forest Covertype -- 581,012 real rows, 54 features, 7-class
+    cartographic classification. A genuinely large-scale benchmark (two
+    orders of magnitude bigger than German Credit's 1,000 rows and the
+    9,000-row MNIST subsample used elsewhere in this project), included so
+    the certificate's calibration and detection-power numbers are checked
+    at a scale where per-client shards are themselves tens of thousands of
+    rows, not a few hundred. `n_samples=None` uses the full dataset."""
+    bunch = fetch_covtype()
+    X_full = StandardScaler().fit_transform(bunch.data.astype(float))
+    y_full = bunch.target.astype(int) - 1  # labels are 1..7 -> 0..6
+    if n_samples is not None and n_samples < len(X_full):
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(len(X_full), size=n_samples, replace=False)
+        X_full, y_full = X_full[idx], y_full[idx]
+    return Population("covertype", X_full, y_full, n_features=X_full.shape[1], n_classes=7)
 
 
 @dataclass
@@ -101,8 +119,15 @@ def split_population(
 def nearest_neighbor_pool(query_X: np.ndarray, pool_X: np.ndarray, pool_y: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
     """The k nearest (by Euclidean distance) points in `pool` to each row of
     `query_X`, used to build position-matched member / non-member sets for
-    the near-neighbor leakage evaluation."""
-    d = np.linalg.norm(pool_X[None, :, :] - query_X[:, None, :], axis=2)
-    idx = np.argsort(d, axis=1)[:, :k].reshape(-1)
-    idx = np.unique(idx)
+    the near-neighbor leakage evaluation. Uses a tree-based / chunked
+    nearest-neighbor search rather than a dense (query x pool) distance
+    matrix, which would be O(n_query * n_pool * n_dims) in memory --
+    negligible for a 1,000-row dataset but hundreds of gigabytes for a
+    pool the size of Covertype's retained set."""
+    from sklearn.neighbors import NearestNeighbors
+
+    k = min(k, len(pool_X))
+    nn = NearestNeighbors(n_neighbors=k).fit(pool_X)
+    _, idx = nn.kneighbors(query_X)
+    idx = np.unique(idx.reshape(-1))
     return pool_X[idx], pool_y[idx]

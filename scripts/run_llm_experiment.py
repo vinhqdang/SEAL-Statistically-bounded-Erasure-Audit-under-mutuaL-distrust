@@ -57,7 +57,13 @@ N_DECOYS = 2         # reduced from the validated-signal reference config to kee
 REAL_CLUSTER_SIZE = len(PARAPHRASE_TEMPLATES)
 PHANTOM_CLUSTER_SIZE = len(PARAPHRASE_TEMPLATES)
 PARTIAL_GUESS_FRACTION = 0.5
-N_TRIALS = 3
+# Bumped from the original N_TRIALS=3 specifically because reviewers correctly
+# flagged that a rate like 1/3 carries a 95% Clopper-Pearson interval of
+# roughly [0.01, 0.91] -- not enough trials to distinguish signal from noise.
+# At ~12 minutes/trial on this CPU-only box, N_TRIALS=20 is the largest count
+# that keeps the whole sweep to a few hours; it substantially narrows the
+# per-condition intervals without requiring a multi-day run.
+N_TRIALS = 20
 
 
 def _canonical_watermark_z(resp, prompt: str, key: int, tokenizer, gen_seed: int) -> float:

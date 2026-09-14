@@ -416,29 +416,29 @@ Calibrated, exact Student-$t$ & 0.333 & 0.667 \\
 
 Each fix moves both numbers in the direction the corresponding theorem predicts \emph{before} it was run: an exact threshold cannot manufacture confidence a small calibration sample does not support, so tightening the threshold to be exact, and then to be correctly composed across channels, necessarily costs detection power as it removes false accusations. These rates should be read for that qualitative direction, not as precise point estimates: with only 3 trials, a rate of $1/3$ carries a 95\% Clopper--Pearson interval of roughly $[0.01, 0.91]$, wide enough that ``consistent with'' a theorem's prediction means the observed count does not contradict it, not that the 3-trial experiment independently corroborates the prediction with any real precision. The large-$n_{\text{trials}}$ German Credit ablation (Table~\ref{tab:calibablation}, Section~\ref{sec:discussion}) is this paper's higher-confidence evidence for the calibration-replicate-count claim these small-$N$ LLM-track tables can only illustrate qualitatively, at the sample sizes a CPU-only, real-fine-tuned-model experiment makes tractable.
 
-Table~\ref{tab:llmfull} reports the final, Bonferroni-corrected certificate's detection rate against all four server behaviors, together with the diversity channel's rate in isolation and the resource-bounded adversary's analytic evasion prediction. The partial-topic-filter adversary guesses $m=2$ of the $R=5$ paraphrase templates (a guess fraction of $0.5$, rounded half-to-even by Python's \texttt{round}, so $0.5\times5=2.5$ rounds to the even integer $2$, not $3$); the resulting empirical detection rate (0.333) is consistent with the exact analytic hypergeometric prediction (Theorem~\ref{thm:hypergeom}: $1 - (R-m)/R = 1 - 3/5 = 0.4$) within this trial count's sampling noise -- the one place in this evaluation where a component is checked against a closed-form formula rather than only Monte Carlo. The WaterDrum-comparison result (Section~\ref{sec:waterdrum-comparison}, Table~\ref{tab:waterdrum}) is drawn from this same final run.
+Table~\ref{tab:llmfull} reports the final, Bonferroni-corrected certificate's detection rate against all four server behaviors, at a substantially larger $n_{\text{trials}}=30$ (up from the $n_{\text{trials}}=3$ used for Table~\ref{tab:llmprogression}'s historical progression above, which tracks four successive code versions and is not rerun here): a GPU-accelerated re-run of the same final certificate version narrows the confidence intervals on the main detection-rate row substantially, at no change to $N_{\text{calib}}=2$ or $\beta_{\text{target}}$, both of which govern calibration sharpness within a trial and are independent of how many Monte Carlo trials are run. The diversity-channel-alone sub-row and the WaterDrum-comparison result (Section~\ref{sec:waterdrum-comparison}, Table~\ref{tab:waterdrum}) are not part of this larger re-run and remain at the original $n_{\text{trials}}=3$: infrastructure instability in the remote GPU environment used for the scale-up (repeated session disconnects immediately after the compute finished, before the fuller per-channel and WaterDrum-baseline data could be retrieved) meant only the five main per-mechanism flags -- which were also captured directly in this run's execution log, independent of the remote filesystem -- survived at the larger scale; recovering the rest requires a further rerun, left for that dedicated pass rather than blocking on it here. The partial-topic-filter adversary guesses $m=2$ of the $R=5$ paraphrase templates (a guess fraction of $0.5$, rounded half-to-even by Python's \texttt{round}, so $0.5\times5=2.5$ rounds to the even integer $2$, not $3$), against an exact analytic hypergeometric prediction (Theorem~\ref{thm:hypergeom}: $1 - (R-m)/R = 1 - 3/5 = 0.4$) -- the one place in this evaluation where a component is checked against a closed-form formula rather than only Monte Carlo. At $n_{\text{trials}}=30$, the empirical detection rate (0.200, 95\% CI $[0.077, 0.386]$) sits below the analytic 0.4, with the interval's upper edge only narrowly excluding it; the earlier $n_{\text{trials}}=3$ run's rate (0.333) was numerically closer but backed by a far wider interval that could not have distinguished the two possibilities. We report this as a real, if minor, discrepancy worth flagging rather than rounding it into agreement: it could reflect ordinary sampling variation still not fully resolved at $n=30$, or a genuine second-order effect the hypergeometric model's idealized assumptions (e.g.\ that the $m$ guessed templates are fixed independently of which one the auditor later checks) do not capture exactly in the real committed-batch implementation.
 
 \begin{table}[t]
 \centering
 \footnotesize
-\caption{Full SEAL-W certificate, final (Bonferroni-corrected) version, all four server behaviors (3 trials, $N_{\text{calib}}{=}2$, $\beta_{\text{target}}{=}0.10$; rates here carry the same wide 3-trial confidence intervals as Table~\ref{tab:llmprogression}). The last row is a theoretical prediction, not an empirical rate -- see prose.}
+\caption{Full SEAL-W certificate, final (Bonferroni-corrected) version, main detection rates at $n_{\text{trials}}{=}30$ ($N_{\text{calib}}{=}2$, $\beta_{\text{target}}{=}0.10$; 95\% Clopper--Pearson intervals in brackets). The diversity-channel-alone and evasion-probability rows are not part of this larger run -- see prose.}
 \label{tab:llmfull}
-\begin{tabular}{@{}lc@{}}
+\begin{tabular}{@{}p{0.52\linewidth}cc@{}}
 \toprule
-Server behavior & Detection rate (empirical) \\
+Server behavior & Rate ($n{=}30$) & 95\% CI \\
 \midrule
-Honest (false-accusation rate) & 0.0 \\
-Lazy (keeps training on everything) & 0.333 \\
-Filter-only (exact-string canned reply) & 0.667 \\
-Topic-filter (uniform suppression) & 0.333 \\
-\quad -- diversity channel alone & 0.333 \\
-Partial topic-filter (guesses 50\% of $R{=}5$) & 0.333 \\
-\quad -- analytic evasion \emph{probability} (theory) & 0.6 \\
+Honest (false-accusation rate) & 0.067 & [0.008, 0.221] \\
+Lazy (keeps training on everything) & 0.200 & [0.077, 0.386] \\
+Filter-only (exact-string canned reply) & 0.233 & [0.099, 0.423] \\
+Topic-filter (uniform suppression) & 0.333 & [0.173, 0.528] \\
+\quad -- diversity channel alone ($n{=}3$) & 0.333 & -- \\
+Partial topic-filter (guesses 50\% of $R{=}5$) & 0.200 & [0.077, 0.386] \\
+\quad -- analytic evasion \emph{probability} (theory) & 0.6 & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-This 3-trial, $N_{\text{calib}}{=}2$ regime is small by design: each trial fine-tunes and audits a real language model on CPU-only hardware, and every rate above should be read as ``roughly this many out of 3,'' not a precise estimate -- the qualitative pattern (which mechanism is caught by which channel, and that both fixes moved every rate in the theoretically-predicted direction) is the result this scale supports, not the exact percentages. Section~\ref{sec:discussion} returns to this as the paper's central open lever.
+Table~\ref{tab:llmfull}'s main row now rests on $n_{\text{trials}}=30$ (each trial still fine-tuning and auditing a real language model, GPU-accelerated for this larger sweep), giving 95\% confidence intervals roughly a third as wide as the $n_{\text{trials}}=3$ regime everywhere else in this section (Table~\ref{tab:llmprogression}, the diversity-channel-alone and WaterDrum-comparison figures) -- a real improvement in evidentiary weight for the certificate's core detection-rate claim, though those intervals are still wide enough that individual rates should be read to roughly $\pm 0.1$--$0.15$, not as exact percentages. The calibration budget itself, $N_{\text{calib}}{=}2$, is unchanged and remains this paper's actual binding constraint (Section~\ref{sec:discussion}) -- running more Monte Carlo trials of the same $N_{\text{calib}}=2$ certificate narrows how precisely we know its detection rate, but does not change the rate itself, which is governed by the calibration budget within each trial, not by how many trials are averaged.
 
 \subsection{Implementation and Reproducibility}
 

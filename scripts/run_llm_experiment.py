@@ -60,10 +60,19 @@ PARTIAL_GUESS_FRACTION = 0.5
 # Bumped from the original N_TRIALS=3 specifically because reviewers correctly
 # flagged that a rate like 1/3 carries a 95% Clopper-Pearson interval of
 # roughly [0.01, 0.91] -- not enough trials to distinguish signal from noise.
-# At ~12 minutes/trial on this CPU-only box, N_TRIALS=20 is the largest count
-# that keeps the whole sweep to a few hours; it substantially narrows the
-# per-condition intervals without requiring a multi-day run.
-N_TRIALS = 20
+# The paper's Table tab:llmfull main detection-rate row reflects N_TRIALS=30
+# (run on a GPU via seal_llm's CUDA path -- see seal_llm/model.py's DEVICE --
+# at ~2 min/trial there vs ~12 min/trial on CPU); this constant is kept at 30
+# so re-running this script reproduces that same trial count. Note the paper's
+# diversity-channel-alone and WaterDrum-comparison figures (Table tab:waterdrum)
+# are still the original N=3 run: the N=30 GPU run's full per-trial CSV was
+# lost to repeated remote-session disconnects immediately after each run
+# completed, before it could be downloaded; only the five main per-mechanism
+# flags survived, recovered from the run's stdout log rather than its CSV
+# (see results/llm_watermark_n30_flags_from_log.csv). Re-running this script
+# end-to-end at N_TRIALS=30 would regenerate the full CSV (including the
+# diversity-channel and WaterDrum fields) in one consistent pass.
+N_TRIALS = 30
 
 
 def _canonical_watermark_z(resp, prompt: str, key: int, tokenizer, gen_seed: int) -> float:

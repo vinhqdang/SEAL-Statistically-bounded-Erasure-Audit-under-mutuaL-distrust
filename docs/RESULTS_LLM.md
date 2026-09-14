@@ -17,7 +17,7 @@ from a run this size, not the exact percentages.
 
 ## Summary table
 
-Three successive fixes to the certificate's threshold, same experiment
+Four successive fixes to the certificate's threshold, same experiment
 otherwise, in the order they were actually found and applied:
 
 | version | false-accusation rate | detection: lazy | filter-only | topic | partial |
@@ -25,28 +25,132 @@ otherwise, in the order they were actually found and applied:
 | hardcoded canary floor (`z=2.0`) | 1.0 (3/3) -- degenerate, always flags | 1.0 | 1.0 | 1.0 | 1.0 |
 | calibrated, asymptotic z-quantile | 0.667 (2/3) | 1.0 | 1.0 | 1.0 | 0.667 |
 | calibrated, exact Student-t quantile | 0.333 (1/3) | 0.333 | 0.333 | 0.667 | 0.333 |
+| + Bonferroni split across the 4 flagging conditions (current) | **0.0** (0/3) | 0.333 | 0.667 | 0.333 | 0.333 |
 
-| metric (final, exact-t version) | value | reading |
+The fourth row is a distinct fix from the third, found by writing
+`docs/PROOFS.md`'s Theorem 5 down and checking the code against it: the
+certificate's `decision_dishonest` is the OR of up to 4 independently-
+calibrated conditions (slot, diversity, positive canary, negative
+canary), each of which was being calibrated at the *same* `beta_target`
+rather than `beta_target` split across them -- by the union bound, that
+only bounds the overall false-accusation rate at `4 * beta_target`, not
+`beta_target`. `seal/certificate.py` already did this split correctly for
+its 2 channels; `seal_llm/certificate.py::decide()` did not, until this
+fix (`seal_llm/certificate.py`, `beta_channel = beta_target / n_channels`).
+False-accusation rate dropped to 0/3 -- but at this project's `n_calib=2`
+regime, the correction is severe enough (`beta_channel` as low as
+`0.10/4 = 0.025`, `t_crit(1 df, 0.975) = 12.71`) that it visibly costs
+real detection power too, not just on false accusations -- see "What the
+Bonferroni fix did and did not fix" below for exactly how.
+
+| metric (final, Bonferroni-corrected version) | value | reading |
 |---|---|---|
-| false-accusation rate (honest flagged) | 0.333 (1/3) | still above `beta_target=0.10`; see "What the exact fix did and did not fix" below |
-| detection rate, lazy (ignores request, keeps training on everything) | 0.333 (1/3) | dropped from 1.0 -- see below |
-| detection rate, filter-only (fine-tunes correctly but string-matches the one literal canonical prompt) | 0.333 (1/3) | dropped from 1.0 |
-| detection rate, topic filter (suppresses any phrasing mentioning the author) | 0.667 (2/3) | driven by the diversity channel -- held up better than the slot channel |
-| detection rate, topic filter, diversity channel alone | 0.667 (2/3) | |
+| false-accusation rate (honest flagged) | **0.0** (0/3) | meets `beta_target=0.10` in this run, at the cost documented below |
+| detection rate, lazy (ignores request, keeps training on everything) | 0.333 (1/3) | |
+| detection rate, filter-only (fine-tunes correctly but string-matches the one literal canonical prompt) | 0.667 (2/3) | |
+| detection rate, topic filter (suppresses any phrasing mentioning the author) | 0.333 (1/3) | see "WaterDrum baseline vs. full SEAL-W" below -- the per-trial detail matters more than this aggregate at n=3 |
+| detection rate, topic filter, diversity channel alone | 0.333 (1/3) | |
 | detection rate, partial topic filter (guesses 50% of the paraphrase pool) | 0.333 (1/3) | analytic prediction: evades with probability 0.6, i.e. ~0.4 expected detection rate |
-| naive baseline: auditor asks only the literal canonical prompt, no PIR/paraphrasing | 0.333 (1/3) | see caveat below -- this reading is not real detection power |
+| naive baseline: auditor asks only the literal canonical prompt, no PIR/paraphrasing | 0.0 (0/3) | superseded by the WaterDrum-equivalent baseline below; kept for continuity, see its own caveat |
 | analytic evasion probability for the partial-filter adversary | 0.6 | `evasion_probability(n_slots=5, n_protected=1, n_tampered=3)`, exact hypergeometric formula |
+
+## WaterDrum baseline vs. full SEAL-W
+
+`seal_llm.certificate.waterdrum_baseline_decide` makes explicit a
+comparison this project's own design already implied: SEAL-W's slot
+channel (one committed real-cluster member's watermark z-score against a
+calibrated null) is architecturally the same check WaterDrum (Dang et
+al.) and the Waterfall watermark it is built on actually run -- watermark
+the training contribution, then test post-unlearning generations for the
+watermark's continued presence. The baseline instantiates this literally:
+ONE canonical (non-paraphrased) prompt, slot-channel-only, no diversity
+channel, no real-cluster -- calibrated the same way, from the same
+honest-mechanism calibration replicates, scored on the canonical prompt
+instead of a random paraphrase. (Caveat, stated plainly: WaterDrum's own
+implementation watermarks via Waterfall -- an LLM-paraphraser-based,
+vocab-permutation watermark -- not Kirchenbauer et al.'s green-list
+watermark used throughout this project. The substitution does not change
+the specific point this baseline is built to demonstrate -- both are
+keyed statistical watermarks meant to survive in the fine-tuned model's
+outputs, and the failure mode below is about a server filtering the
+*check*, not about the watermark's own robustness -- but it means this is
+not literally WaterDrum's code, only its verification methodology.)
+
+| mechanism | full SEAL-W detection | WaterDrum-baseline detection |
+|---|---|---|
+| honest (false-accusation) | 0.0 (0/3) | 0.333 (1/3) |
+| lazy | 0.333 (1/3) | 0.667 (2/3) |
+| filter-only | 0.667 (2/3) | 0.333 (1/3) |
+| **topic filter (uniform suppression)** | **0.333 (1/3)** | **0.333 (1/3)** |
+| partial topic filter | 0.333 (1/3) | 0.333 (1/3) |
+
+At this aggregate, n=3-trial level the two look similar against topic
+filter -- but the per-trial detail is the actual finding, and it is not
+symmetric noise:
+
+| trial (seed) | topic diversity ratio | topic diversity threshold | full SEAL-W flags topic? | WaterDrum-baseline z | WaterDrum-baseline threshold | WaterDrum-baseline flags topic? | honest flagged by WaterDrum-baseline? |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.0 (fully collapsed) | -1.02 | No | 0.0 | -1.04 | **Yes** | **Yes (false accusation)** |
+| 1 | 0.0 (fully collapsed) | -0.38 | No | 0.0 | 6.63 | No | No |
+| 2 | 0.0 (fully collapsed) | **+0.46** | **Yes** | 0.0 | 2.01 | No | No |
+
+Every single trial shows the real-cluster's response diversity **exactly
+0** under topic filter (Proposition 4 in `docs/PROOFS.md`: an adversary
+that swaps in one fixed canned reply for every phrasing collapses every
+SimHash fingerprint in the cluster to identical, so pairwise diversity is
+exactly 0 -- not approximately, exactly, as the proof requires). Whether
+the certificate actually *flags* this depends entirely on whether that
+trial's calibrated diversity threshold happens to land above 0:
+
+* **Trial 2 is the clean, predicted story**: diversity threshold `+0.46`
+  (above 0), so the exact-0 diversity correctly flags topic filter via
+  SEAL-W's diversity channel -- while the WaterDrum-equivalent baseline,
+  seeing only the ONE canonical query return a filtered, non-watermarked
+  reply (`z=0.0`), reads that as "no signal, might just be honestly
+  forgotten" and does **not** flag it. This is precisely the false
+  negative WaterDrum's own Appendix D names as unsolved, reproduced here
+  directly against the mechanism built to exploit it.
+* **Trials 0 and 1 show the honest cost of this project's own small
+  calibration sample (`n_calib=2` authors)**: the calibrated diversity
+  threshold itself lands *below* zero, so even a perfect 0.0 diversity
+  ratio isn't low enough to cross it -- the Bonferroni-widened threshold
+  (needed for Theorem 5's guarantee to actually hold) leaves too little
+  room at this sample size. Trial 0's WaterDrum-baseline threshold is
+  *also* negative for the same underlying reason (a noisy 2-point
+  calibration null), which is why it flags topic filter there too -- but
+  also flags the HONEST run in the very same trial. That is not real
+  detection power; it is the same small-sample degeneracy the
+  false-accusation-rate table already reports honestly, showing up on
+  both baselines at once, not a second, independent confirmation of
+  either one.
+
+**The reading that survives this small a sample**: the mechanism
+predicted in `docs/ALGORITHM_LLM.md` -- a WaterDrum-style single-query
+watermark check cannot distinguish "genuinely forgotten" from "detected
+and filtered," while a diversity channel comparing a whole cluster's
+response shape can -- is directly visible whenever the calibration sample
+is not itself too noisy to support any confident call at all (trial 2).
+It is not yet a clean *aggregate* result, because `n_calib=2` and 3 trials
+is too small a sample for the Bonferroni-corrected threshold to reliably
+avoid landing below zero -- exactly `docs/RESULTS_LLM.md`'s pre-existing
+conclusion ("more calibration replicates, not a different formula, is the
+only real fix from here"), now shown to bind on the WaterDrum-comparison
+result too, not just on the certificate's own internal calibration.
 
 ## What went right
 
-* **The diversity channel is the most robust of the two.** Topic-filter
-  (which the slot channel structurally cannot catch -- see
-  `docs/ALGORITHM_LLM.md` Section 4.3) is still caught 2 of 3 times by the
-  diversity channel alone even after the stricter exact threshold made
-  every other detection rate drop, exactly the division of labor the
-  design predicts: it does not depend on hiding which slot is checked, so
-  it degrades more gracefully as the calibration sample shrinks than a
-  threshold that does.
+* **The diversity channel is the only one of the two that can catch
+  topic-filter at all** (which the slot channel structurally cannot --
+  see `docs/ALGORITHM_LLM.md` Section 4.3), and it does so in exactly the
+  trial where the calibration sample is not itself too degenerate to
+  support any confident call (trial 2 above) -- the exact division of
+  labor the design predicts. The Bonferroni fix (needed for the
+  false-accusation-rate guarantee to actually hold) makes this channel's
+  threshold noticeably more fragile at `n_calib=2`, per the WaterDrum-
+  comparison section above: real diversity collapse (a ratio of exactly
+  0, every trial) is necessary but, at this sample size, not always
+  sufficient to cross a threshold that a 2-point calibration sample can
+  push below zero.
 * **The partial-filter adversary's empirical detection rate is consistent
   with the exact analytic hypergeometric prediction** within the wide
   sampling noise this replicate count allows (predicted ~0.4, observed
@@ -129,53 +233,110 @@ principled bound on exactly how many replicates are needed, as a
 function of the target power and false-accusation rate, is still an open
 question rather than something this run answers.
 
+## What the Bonferroni fix did and did not fix
+
+The third fix (this session) is independent of the Student-t fix above:
+it corrects *how many* thresholds get calibrated at `beta_target`, not the
+formula each one uses. Writing `docs/PROOFS.md`'s Theorem 5 (a plain union
+bound) down and checking it against `seal_llm/certificate.py::decide()`
+showed that all four of its independently-calibrated flagging conditions
+(slot, diversity, positive canary, negative canary) were being calibrated
+at the *same*, un-split `beta_target` -- so the true worst-case
+false-accusation rate was only bounded at `4 * beta_target`, not
+`beta_target`, exactly the kind of gap a formal statement is supposed to
+surface rather than an experiment silently absorbing it into "noise."
+`seal/certificate.py` already avoided this (it splits `beta_target / 2`
+across its two channels); `seal_llm/certificate.py::decide()` now splits
+`beta_target / n_channels` across however many of the four conditions are
+actually being calibrated in a given call.
+
+This run's false-accusation rate dropped from 0.333 to **0.0** -- but, as
+the WaterDrum-comparison section above shows directly, the cost lands
+specifically on the diversity channel: at `n_calib=2`, splitting
+`beta_target` four ways pushes `beta_channel` down to `0.025`,
+`t_crit(1 df, 0.975) = 12.71` (versus `6.31` at the un-split
+`beta_target=0.10`), wide enough that the diversity threshold itself
+lands *below zero* in 2 of 3 trials -- meaning even the exact, perfect 0.0
+diversity ratio a uniform-suppression adversary always produces (trials 0
+and 1 both show it) is not always low enough to cross a threshold that
+low. This is the same phenomenon the Student-t fix produced one level up
+(a formally correct threshold reflecting that a tiny calibration sample
+cannot support the confidence a looser test implied), now showing up
+again from correcting the *composition* across channels rather than the
+*quantile formula* within one channel. It is not a reason to walk the fix
+back -- Theorem 5's guarantee does not hold without it, and an unguaranteed
+false-accusation rate is a worse defect in an audit certificate than
+reduced power -- but it sharpens, rather than resolves, this project's
+standing conclusion: **more calibration replicates is the lever that
+actually matters, and both fixes made getting it right cost more of them,
+not less.**
+
 ## The naive-baseline caveat
 
 The "naive, no-PIR, literal-prompt-only" baseline against `filter_only`
-reads as "detected" in 1 of 3 trials. This is **not** evidence that the
-naive check has real power against this adversary: `filter_only` always
-returns the exact same canned, near-zero-z reply to the literal prompt by
-construction, so a genuine detection is impossible for it in this
-comparison. The one "detected" reading happened because the (correctly, if
-noisily, calibrated) slot-channel threshold for that trial happened to sit
-below zero -- itself a symptom of the same small-`N_CALIB_AUTHORS`
-calibration noise discussed above, not a real signal. Read the naive
-baseline's true rate as 0/3 (always fooled), with the observed 1/3 as
-calibration noise around that, not as 33% detection power.
+now reads 0/3 in this run -- correctly reflecting that `filter_only`
+always returns the exact same canned, near-zero-z reply to the literal
+prompt by construction, so a genuine detection is impossible for it in
+this comparison. (An earlier run of this same baseline, before the
+Bonferroni fix, happened to read 1/3 "detected," for the same
+below-zero-threshold reason documented in the WaterDrum-comparison
+section above -- calibration noise, not real signal, either way.) This
+naive baseline is superseded by `waterdrum_baseline_decide` above, which
+runs the same "one canonical prompt, no clustering" idea against every
+mechanism, not just `filter_only`, and is kept here only for continuity
+with earlier versions of this document.
 
 ## Honest summary
 
-* **The core mechanism works**: a real-cluster of paraphrased queries plus
-  a response-diversity channel target two different adversary classes via
-  two independent channels, exactly as designed, and the resource-bounded
-  adversary's evasion rate is consistent with the closed-form
-  hypergeometric formula at both threshold versions tested.
-* **Three successive, honestly-measured fixes, each doing what it should
+* **The core mechanism works, and is now shown against an explicit stand-in
+  for prior art, not just internally**: a real-cluster of paraphrased
+  queries plus a response-diversity channel target two different adversary
+  classes via two independent channels; the WaterDrum-equivalent baseline
+  comparison above shows the specific case (uniform topic suppression)
+  where a single-query watermark check -- architecturally what WaterDrum's
+  own verification methodology runs -- cannot tell "forgotten" from
+  "filtered," while the diversity channel can, whenever the calibration
+  sample itself is not too degenerate to support any call (trial 2). The
+  resource-bounded partial-filter adversary's evasion rate is consistent
+  with the closed-form hypergeometric formula throughout.
+* **Four successive, honestly-measured fixes, each doing what it should
   and no more**: a hardcoded threshold degenerated to flagging everything
   (1.0 false-accusation rate); calibrating it from data fixed the
-  degeneracy but used the wrong asymptotic formula (0.667); using the
-  exact finite-sample formula correctly reduced both the false-accusation
-  rate AND the detection rate (0.333 each), because an exact threshold
-  cannot manufacture confidence a 2-replicate calibration sample does not
-  have. Each number moved in the direction the relevant theory predicts,
-  in that order, which is itself the strongest evidence available here
-  that the certificate's calibration logic is doing what it claims to.
-* **The remaining problem is sample size, not the formula.** At
-  `N_CALIB_AUTHORS=2`, both the false-accusation rate and detection power
-  are governed more by which 2 calibration authors happened to be drawn
-  than by anything about the mechanism under test -- visible directly in
-  the per-trial numbers (one trial flags nothing, another flags
-  everything). This is not fixable by a better statistic; it needs more
-  calibration replicates, exactly as `docs/RESULTS.md` already concludes
-  for the classical track's channel B.
-* **A fixed "magic number" threshold is dangerous, and was caught here by
-  actually running the experiment**, not by inspection -- the first
-  version of this construction degenerated to flagging everything,
-  silently, until measured. Any constant threshold in a system like this
-  needs to be calibrated from the actual deployment's own data; and any
-  calibrated-from-data threshold still needs the statistically correct
-  finite-sample formula, not an asymptotic approximation, or it will
-  silently overclaim confidence the calibration sample does not support.
+  degeneracy but used the wrong asymptotic formula (0.667); the exact
+  finite-sample formula correctly reduced both the false-accusation rate
+  AND the detection rate (0.333 each); and Bonferroni-splitting
+  `beta_target` across the certificate's 4 independently-calibrated
+  conditions (a real gap caught by writing `docs/PROOFS.md`'s Theorem 5
+  down and checking the code against it, not by an experiment flagging
+  visibly wrong behavior) reduced the false-accusation rate to **0.0**, at
+  a further, predictable cost to detection power. Each number moved in the
+  direction the relevant theory predicts, in that order, which is itself
+  the strongest evidence available here that the certificate's calibration
+  logic is doing what it claims to.
+* **The remaining problem is sample size, not the formula, and this is now
+  demonstrated twice over.** At `N_CALIB_AUTHORS=2`, both the
+  false-accusation rate and detection power are governed more by which 2
+  calibration authors happened to be drawn than by anything about the
+  mechanism under test -- visible in the per-trial numbers for the
+  Student-t fix (`docs/RESULTS_LLM.md`'s earlier section) and, separately,
+  in the Bonferroni fix pushing the diversity threshold below zero in 2 of
+  3 trials even though every trial's true diversity ratio is exactly 0
+  under uniform suppression. Two independent, honestly-motivated
+  correctness fixes have now both run into the same wall. This is not
+  fixable by a better statistic; it needs more calibration replicates,
+  exactly as `docs/RESULTS.md` already concludes for the classical track's
+  channel B.
+* **A fixed "magic number" threshold is dangerous, and an uncorrected
+  multiple-comparisons composition across channels is a second, subtler
+  version of the same danger** -- both were caught here by actually
+  measuring against the certificate's own stated guarantee (an empirical
+  run for the first, a written-down proof for the second), not by
+  inspection alone. Any constant threshold needs to be calibrated from the
+  actual deployment's own data; any calibrated-from-data threshold needs
+  the statistically correct finite-sample formula; and any certificate
+  that ORs together more than one calibrated condition needs its
+  false-accusation budget split across them, or its headline `beta_target`
+  is not the rate it is actually controlling.
 
 ## Reproducing
 
@@ -185,6 +346,23 @@ python3 scripts/run_llm_experiment.py
 
 Raw per-trial data: `results/llm_watermark_raw.csv`. Summary:
 `results/llm_watermark_summary.csv`. This is a genuinely small, CPU-only
-run (~30 minutes total); increasing `N_TRIALS` and `N_CALIB_AUTHORS` in the
-script (at the cost of proportionally more wall-clock time) is the direct
-way to tighten every rate reported above.
+run (~30-45 minutes total, longer than earlier versions since every
+mechanism now also pays for the WaterDrum-baseline canonical-prompt
+check); increasing `N_TRIALS` and `N_CALIB_AUTHORS` in the script (at the
+cost of proportionally more wall-clock time) is the direct way to tighten
+every rate reported above -- see "What the Bonferroni fix did and did not
+fix" for why that lever now matters even more than before.
+
+A separate variant, `scripts/run_llm_experiment_tofu.py`, runs the exact
+same certificate and mechanisms but sources its author pool from the real
+`locuslab/TOFU` benchmark (real fictitious-author names and real
+biographical facts as generation seeds, not invented ones) instead of the
+synthetic `AUTHOR_NAMES` pool -- see that script's own module docstring
+for exactly what is and is not comparable to the official TOFU benchmark
+as a result (short version: real entities/facts, but still `distilgpt2`
+and this project's own watermark/PIR certificate, not the official
+phi-1.5/llama2-7b baselines or TOFU's own forget-quality metrics). Its
+own results, once run, would be saved to `results/llm_watermark_raw_tofu.csv`
+/ `results/llm_watermark_summary_tofu.csv` -- not yet run to completion in
+this repository as of this writing; see `docs/ALGORITHM_LLM.md` for how it
+fits into the rest of the protocol.

@@ -26,7 +26,18 @@ are in scope here:
 WaterDrum (Dang et al., the closest prior work combining watermarking with
 unlearning verification) explicitly flags, in its own Appendix D, that it
 does **not** solve the case where the server detects and filters the
-watermark check itself. That is the open problem this construction targets.
+watermark check itself. That is the open problem this construction
+targets. `seal_llm.certificate.waterdrum_baseline_decide` makes this
+comparison literal and runnable rather than only a citation: it implements
+the single-canonical-prompt, slot-channel-only check that is what
+WaterDrum's own verification methodology reduces to (watermark the
+contribution, test one post-unlearning generation for the watermark's
+continued presence), calibrated identically to every other threshold
+here, and runs it side by side with the full protocol on the same model
+and mechanisms -- see `docs/RESULTS_LLM.md`'s "WaterDrum baseline vs. full
+SEAL-W" section for the resulting per-trial comparison, and
+`docs/PROOFS.md` Proposition 4 for the exact (not just empirical) sense in
+which uniform suppression defeats it.
 
 ## 2. What is new here and what is not
 
@@ -97,7 +108,23 @@ which adversary class each detection channel provably defeats, and Section
 5 states plainly what neither channel can rule out -- the same scoping
 discipline Tang et al.'s impossibility framing and RESPIR's own theorem
 statements use, not a lower standard than the literature already applies
-to itself.
+to itself. `docs/PROOFS.md` restates every claim in Section 4 (and the
+Bonferroni composition above) as a numbered Definition/Theorem/Proof, with
+an explicit accounting of what each proof does and does not establish --
+this document is the narrative account; that one is the checkable one.
+
+Author identities and content: `seal_llm/data.py::AUTHOR_NAMES` and
+`PARAPHRASE_TEMPLATES` are entirely invented for this project's default
+experiment (`scripts/run_llm_experiment.py`). `seal_llm/tofu_data.py` and
+`seal_llm/data.py::build_tofu_authors` offer a second author source that
+grounds the same protocol in the real, published `locuslab/TOFU`
+unlearning benchmark (real fictitious-author names and real biographical
+facts, used only as generation seeds -- see that module's own docstring
+for exactly what is and is not borrowed from TOFU, and
+`scripts/run_llm_experiment_tofu.py`'s docstring for what is and is not
+comparable to the official TOFU leaderboard as a result). Neither source
+changes the protocol below in any way; they differ only in where the
+author pool's names/content come from.
 
 ## 3. Protocol
 
@@ -148,6 +175,16 @@ independent channels, plus canary sanity checks:
      untrustworthy this round.
 
 `decision_dishonest = slot_flag OR diversity_flag OR NOT canaries_ok`.
+Since this is an OR of up to four independently-calibrated conditions
+(slot, diversity, positive canary, negative canary), `beta_target` is
+split evenly across however many of them are actually being calibrated in
+a given call (`beta_channel = beta_target / n_channels`) before each
+threshold is computed, so that the union bound over all four conditions
+still controls the overall false-accusation rate at `beta_target` rather
+than `n_channels * beta_target` -- see `docs/PROOFS.md` Theorem 5 for the
+exact statement and proof, and for the gap this closed (an earlier version
+of this module calibrated every condition at the same, un-split
+`beta_target`).
 
 ## 4. What is provably defeated, and by which channel
 

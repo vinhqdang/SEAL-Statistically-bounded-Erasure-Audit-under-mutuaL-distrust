@@ -65,3 +65,40 @@ def build_authors(base_model, tokenizer, names, gamma=0.5, delta=8.0,
             docs.append(prompt + cont)
         authors.append(AuthorProfile(name=name, key=key, prompt=prompt, documents=docs))
     return authors
+
+
+def build_tofu_authors(base_model, tokenizer, tofu_authors, gamma=0.5, delta=8.0,
+                        n_docs=6, max_new_tokens=30, seed0=0) -> list:
+    """TOFU-grounded variant of `build_authors`: same structure and same
+    `AuthorProfile` output, but each author's real name and a short real
+    biographical fact snippet -- both extracted from the real
+    `locuslab/TOFU` benchmark by `seal_llm.tofu_data.load_tofu_authors` --
+    seed the watermarked-generation prompt, instead of the purely synthetic
+    `f"{name} is an author who"` seed `build_authors` uses.
+
+    This does NOT train on TOFU's own QA text: TOFU's answers are static,
+    pre-existing GPT-4-generated text with no watermark bias in them, so
+    using them as training documents directly would carry no green-list
+    signal at all and silently break the certificate's whole detection
+    mechanism. Instead, only the real name and fact snippet are used, to
+    seed `generate_watermarked` -- the exact same, unchanged watermarking
+    call `build_authors` uses -- so every resulting training document is
+    still OUR OWN watermarked generation (green-list bias intact), just
+    seeded with a real entity and a real fact about them rather than an
+    invented one. `tofu_authors` is a list of
+    `seal_llm.tofu_data.TofuAuthor` (fields: name, fact_snippet,
+    raw_qa_pairs)."""
+    authors = []
+    for i, ta in enumerate(tofu_authors):
+        key = 1000 + i * 137
+        prompt = f"{ta.name}, {ta.fact_snippet}, is an author who"
+        docs = []
+        for d in range(n_docs):
+            torch.manual_seed(seed0 * 9973 + i * 97 + d)
+            cont = generate_watermarked(
+                base_model, tokenizer, prompt, key=key, gamma=gamma, delta=delta,
+                max_new_tokens=max_new_tokens, seed=seed0 * 9973 + i * 97 + d,
+            )
+            docs.append(prompt + cont)
+        authors.append(AuthorProfile(name=ta.name, key=key, prompt=prompt, documents=docs))
+    return authors

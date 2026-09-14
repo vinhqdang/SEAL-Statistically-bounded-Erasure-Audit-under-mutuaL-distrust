@@ -293,32 +293,53 @@ def decide(raw: RawAuditStats, null_z_scores: np.ndarray, null_diversity_ratios:
     canary_z_floor=2.0 did in this project's own first full run at this
     scale (see docs/RESULTS_LLM.md). Pass explicit `canary_z_floor`/
     `canary_z_ceiling` only to override calibration entirely (e.g. in unit
-    tests with a toy null)."""
+    tests with a toy null).
+
+    Bonferroni split across channels: `decision_dishonest` is the OR of up
+    to four independently-calibrated conditions (slot, diversity,
+    positive-canary, negative-canary -- fewer if some are passed as fixed
+    constants rather than calibrated here). Calibrating every one of them
+    at the SAME `beta_target` would only bound the overall false-accusation
+    rate by the union bound at `n_channels * beta_target`, not
+    `beta_target` -- e.g. 4x looser than intended at this module's default
+    `beta_target=0.10`. `seal/certificate.py` already splits its
+    `beta_target` across its two channels (`beta_target / 2`) for exactly
+    this reason; this module did not, until this fix, which now splits
+    `beta_target` evenly across however many of the four conditions are
+    actually being calibrated in this call (a fixed `canary_z_floor`/
+    `canary_z_ceiling` is not calibrated at any beta, so it does not count
+    toward the split)."""
     if len(null_z_scores) < 2:
         raise ValueError("null_z_scores needs >=2 calibration replicates for a defined sample std")
+    diversity_active = null_diversity_ratios is not None and len(null_diversity_ratios) > 1
+    canary_floor_calibrated = canary_z_floor is None
+    canary_ceiling_calibrated = canary_z_ceiling is None
+    n_channels = 1 + int(diversity_active) + int(canary_floor_calibrated) + int(canary_ceiling_calibrated)
+    beta_channel = beta_target / n_channels
+
     mu, sd = float(null_z_scores.mean()), float(null_z_scores.std(ddof=1) + 1e-9)
-    tau = mu + _predictive_quantile(beta_target, len(null_z_scores)) * sd  # upper-tail: flag if the checked slot is unusually HIGH
+    tau = mu + _predictive_quantile(beta_channel, len(null_z_scores)) * sd  # upper-tail: flag if the checked slot is unusually HIGH
     slot_flag = raw.z_real > tau
 
     if canary_z_floor is None:
         if null_positive_canary is None or len(null_positive_canary) < 2:
             raise ValueError("need null_positive_canary (>=2 replicates) unless canary_z_floor is given explicitly")
-        q = _predictive_quantile(beta_target, len(null_positive_canary))
+        q = _predictive_quantile(beta_channel, len(null_positive_canary))
         canary_z_floor = float(np.mean(null_positive_canary)) - q * float(np.std(null_positive_canary, ddof=1) + 1e-9)
     if canary_z_ceiling is None:
         if null_negative_canary is None or len(null_negative_canary) < 2:
             raise ValueError("need null_negative_canary (>=2 replicates) unless canary_z_ceiling is given explicitly")
-        q = _predictive_quantile(beta_target, len(null_negative_canary))
+        q = _predictive_quantile(beta_channel, len(null_negative_canary))
         canary_z_ceiling = float(np.mean(null_negative_canary)) + q * float(np.std(null_negative_canary, ddof=1) + 1e-9)
 
     canaries_ok = (raw.z_positive_canary > canary_z_floor) and (raw.z_negative_canary_mean < canary_z_ceiling)
 
     tau_div = None
     diversity_flag = False
-    if null_diversity_ratios is not None and len(null_diversity_ratios) > 1:
+    if diversity_active:
         mu_d = float(np.mean(null_diversity_ratios))
         sd_d = float(np.std(null_diversity_ratios, ddof=1) + 1e-9)
-        tau_div = mu_d - _predictive_quantile(beta_target, len(null_diversity_ratios)) * sd_d  # lower-tail: flag if diversity is unusually LOW
+        tau_div = mu_d - _predictive_quantile(beta_channel, len(null_diversity_ratios)) * sd_d  # lower-tail: flag if diversity is unusually LOW
         diversity_flag = raw.diversity_ratio < tau_div
 
     return SealWResult(
@@ -339,6 +360,37 @@ def audit(committed: CommittedBatch, null_z_scores: np.ndarray, null_diversity_r
     raw = evaluate_batch(committed, keys=keys, rng_seed=rng_seed)
     return decide(raw, null_z_scores, null_diversity_ratios, beta_target,
                   null_positive_canary, null_negative_canary, canary_z_floor, canary_z_ceiling)
+
+
+@dataclass
+class WaterDrumBaselineResult:
+    """Decision under a single-canonical-prompt, slot-channel-only check:
+    the auditor asks the forgotten author's ONE literal document-seed
+    prompt (no paraphrase cluster, no diversity channel, no PIR-hidden
+    choice among several phrasings -- there is only one query, so nothing
+    to hide) and flags iff its watermark z-score exceeds a calibrated
+    threshold. This is a faithful reproduction of the verification
+    methodology WaterDrum (Dang et al.) and the Waterfall watermark it is
+    built on actually check: watermark the training contribution, then
+    test post-unlearning generations for the watermark's continued
+    presence. WaterDrum's own Appendix D states this does not address a
+    server that detects and filters the audit query itself -- this
+    baseline exists to measure exactly how that gap manifests, side by
+    side with the full SEAL-W decision on the SAME model/mechanism, not to
+    claim an unfair comparison against a strawman."""
+    z: float
+    threshold: float
+    null_mean: float
+    null_std: float
+    flag: bool
+
+
+def waterdrum_baseline_decide(z: float, null_zs: np.ndarray, beta_target: float = 0.05) -> WaterDrumBaselineResult:
+    if len(null_zs) < 2:
+        raise ValueError("null_zs needs >=2 calibration replicates for a defined sample std")
+    mu, sd = float(null_zs.mean()), float(null_zs.std(ddof=1) + 1e-9)
+    tau = mu + _predictive_quantile(beta_target, len(null_zs)) * sd
+    return WaterDrumBaselineResult(z=z, threshold=tau, null_mean=mu, null_std=sd, flag=z > tau)
 
 
 def evasion_probability(n_slots: int, n_protected: int, n_tampered: int) -> float:

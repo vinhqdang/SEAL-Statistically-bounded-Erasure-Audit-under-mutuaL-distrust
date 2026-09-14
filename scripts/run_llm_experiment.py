@@ -22,7 +22,10 @@ from seal_llm.mechanisms import (
     honest_unlearn, train_retain_all, dishonest_lazy, dishonest_filter_only,
     dishonest_topic_filter, dishonest_partial_topic_filter,
 )
-from seal_llm.certificate import build_candidate_batch, commit_batch, evaluate_batch, decide, evasion_probability
+from seal_llm.certificate import (
+    build_candidate_batch, commit_batch, evaluate_batch, decide, evasion_probability,
+    waterdrum_baseline_decide,
+)
 from seal_llm.watermark import score_text
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
@@ -55,6 +58,14 @@ REAL_CLUSTER_SIZE = len(PARAPHRASE_TEMPLATES)
 PHANTOM_CLUSTER_SIZE = len(PARAPHRASE_TEMPLATES)
 PARTIAL_GUESS_FRACTION = 0.5
 N_TRIALS = 3
+
+
+def _canonical_watermark_z(resp, prompt: str, key: int, tokenizer, gen_seed: int) -> float:
+    """The WaterDrum-equivalent check: score the response to the ONE
+    literal canonical (document-seed) prompt, no paraphrasing."""
+    text = resp(prompt, gen_seed)
+    prev_token_id = tokenizer(prompt, return_tensors="pt").input_ids[0, -1].item()
+    return score_text(tokenizer, text, prev_token_id, key=key, gamma=GAMMA).z
 
 
 def run_trial(base_model, tokenizer, seed: int) -> dict:
@@ -92,7 +103,7 @@ def run_trial(base_model, tokenizer, seed: int) -> dict:
     # Null distributions (both channels), shared across all mechanism
     # comparisons for this trial: rerun the HONEST mechanism targeting each
     # calibration author instead of the real forget request.
-    null_zs, null_divs, null_pos, null_neg = [], [], [], []
+    null_zs, null_divs, null_pos, null_neg, null_wd = [], [], [], [], []
     for calib_name in calib_names:
         _, resp_calib = honest_unlearn(base_model, tokenizer, authors, calib_name, seed=seed, **mech_kwargs)
         calib_batch = build_candidate_batch(authors, calib_name, phantom_authors, n_decoys=N_DECOYS,
@@ -104,10 +115,21 @@ def run_trial(base_model, tokenizer, seed: int) -> dict:
         null_divs.append(raw.diversity_ratio)
         null_pos.append(raw.z_positive_canary)
         null_neg.append(raw.z_negative_canary_mean)
+
+        # Same calibration replicate, but scored the WaterDrum-equivalent
+        # way: the calibration author's own literal canonical prompt, no
+        # paraphrasing -- an independent null for the baseline comparison
+        # below, built from the exact same honest re-runs.
+        calib_prompt = next(a.prompt for a in authors if a.name == calib_name)
+        calib_key = next(a.key for a in authors if a.name == calib_name)
+        null_wd.append(_canonical_watermark_z(resp_calib, calib_prompt, calib_key, tokenizer, seed * 733))
     null_zs = np.array(null_zs)
     null_divs = np.array(null_divs)
     null_pos = np.array(null_pos)
     null_neg = np.array(null_neg)
+    null_wd = np.array(null_wd)
+
+    forget_key = next(a.key for a in authors if a.name == forget_name)
 
     mechanisms = [
         ("honest", resp_honest), ("lazy", resp_lazy), ("filter", resp_filter),
@@ -130,12 +152,21 @@ def run_trial(base_model, tokenizer, seed: int) -> dict:
         out[f"{tag}_diversity_flag"] = res.diversity_flag
         out[f"{tag}_flag"] = res.decision_dishonest
 
+        # WaterDrum-equivalent baseline on the SAME mechanism's response:
+        # one literal canonical prompt, slot-channel-only, no diversity
+        # channel, no real-cluster -- see
+        # seal_llm.certificate.WaterDrumBaselineResult's docstring.
+        wd_z = _canonical_watermark_z(resp, forget_prompt, forget_key, tokenizer, seed * 131 + hash(tag) % 1000)
+        wd_res = waterdrum_baseline_decide(wd_z, null_wd, beta_target=BETA_TARGET)
+        out[f"{tag}_waterdrum_z"] = wd_res.z
+        out[f"{tag}_waterdrum_threshold"] = wd_res.threshold
+        out[f"{tag}_waterdrum_flag"] = wd_res.flag
+
     # Naive baseline (no PIR, no clustering, no paraphrasing): the auditor
     # asks the filtering server the ONE known canonical trigger prompt
     # directly. Demonstrates the failure mode the real protocol avoids --
     # the exact-match filter catches it and the naive check reads null.
     prev_token_id = tokenizer(forget_prompt, return_tensors="pt").input_ids[0, -1].item()
-    forget_key = next(a.key for a in authors if a.name == forget_name)
     naive_text = resp_filter(forget_prompt, seed * 131)
     naive_score = score_text(tokenizer, naive_text, prev_token_id, key=forget_key, gamma=GAMMA)
     out["naive_filter_z_real"] = naive_score.z
@@ -169,6 +200,14 @@ def main():
         "analytic_evasion_prob_partial_filter_within_cluster":
             evasion_probability(n_slots=len(PARAPHRASE_TEMPLATES), n_protected=1,
                                  n_tampered=max(1, round(PARTIAL_GUESS_FRACTION * len(PARAPHRASE_TEMPLATES)))),
+        # WaterDrum-equivalent baseline (single canonical prompt, slot
+        # channel only) vs full SEAL-W, mechanism by mechanism -- the
+        # explicit "reproduce and break WaterDrum" comparison.
+        "waterdrum_false_accusation_rate_honest": df["honest_waterdrum_flag"].mean(),
+        "waterdrum_detection_rate_lazy": df["lazy_waterdrum_flag"].mean(),
+        "waterdrum_detection_rate_filter_only": df["filter_waterdrum_flag"].mean(),
+        "waterdrum_detection_rate_topic_filter": df["topic_waterdrum_flag"].mean(),
+        "waterdrum_detection_rate_partial_topic_filter": df["partial_waterdrum_flag"].mean(),
     }
     print(summary)
     pd.Series(summary).to_csv(RESULTS_DIR / "llm_watermark_summary.csv")

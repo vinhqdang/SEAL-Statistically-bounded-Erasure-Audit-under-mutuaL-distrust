@@ -5,7 +5,7 @@ from scipy import stats
 from seal_llm.certificate import (
     Candidate, CommittedBatch, RawAuditStats, decide, evaluate_batch,
     build_candidate_batch, evasion_probability, Z_SCALE, FINGERPRINT_BITS,
-    _predictive_quantile,
+    _predictive_quantile, waterdrum_baseline_decide,
 )
 from seal_llm.data import PARAPHRASE_TEMPLATES
 from seal_llm.pir import keygen
@@ -209,6 +209,30 @@ def test_evasion_probability_matches_brute_force_enumeration():
             if not (set(protected) & set(tampered)):
                 hit += 1
     assert evasion_probability(n_slots, n_protected, n_tampered) == pytest.approx(hit / total)
+
+
+# ---- WaterDrum-equivalent baseline (single canonical prompt, slot-only) ----
+
+def test_waterdrum_baseline_flags_a_clearly_watermarked_response():
+    null_wd = np.array([-0.2, 0.1, -0.1, 0.3, -0.3, 0.2])
+    res = waterdrum_baseline_decide(z=6.0, null_zs=null_wd, beta_target=0.10)
+    assert res.flag
+
+
+def test_waterdrum_baseline_misses_a_filtered_canned_reply():
+    """The gap this baseline exists to measure: a server that recognizes
+    the topic and swaps in a canned, non-watermarked filler reply for the
+    ONE canonical prompt (dishonest_topic_filter's exact behavior) drives
+    the watermark z-score down to null-like -- indistinguishable, on this
+    single-query slot-only check, from a server that genuinely forgot.
+    WaterDrum's own Appendix D names this as unsolved; SEAL-W's diversity
+    channel (which needs more than one query to compare against) is what
+    catches it instead -- see test_decide_flags_diversity_channel_when_
+    real_cluster_uniformly_suppressed in this same file."""
+    null_wd = np.array([-0.2, 0.1, -0.1, 0.3, -0.3, 0.2])
+    filtered_reply_z = 0.05  # a canned, unwatermarked filler reads near-null
+    res = waterdrum_baseline_decide(z=filtered_reply_z, null_zs=null_wd, beta_target=0.10)
+    assert not res.flag
 
 
 def test_evasion_probability_edge_cases():

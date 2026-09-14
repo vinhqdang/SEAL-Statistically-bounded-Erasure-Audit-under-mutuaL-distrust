@@ -1,0 +1,127 @@
+\documentclass[10pt,journal,compsoc]{IEEEtran}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+
+\begin{document}
+
+\title{Supplemental Material: Complete Proofs for\\``SEAL: Statistically-Bounded Erasure Audits\\for Machine Unlearning under Mutual Distrust''}
+
+\author{Quang-Vinh~Dang}
+
+\maketitle
+
+\noindent This document gives complete proofs for the five results stated in Section~7 of the main manuscript. Numbering (Theorems 1--4, Proposition 1) matches the main text exactly; no result here is referenced that is not already stated there.
+
+\section*{Theorem 1 (PIR Obliviousness)}
+
+\begin{definition}[Index-privacy]
+A single-server PIR scheme (\textsc{KeyGen}, \textsc{Query}, \textsc{Respond}) over databases of length $n$ is \emph{index-private} if for every probabilistic-polynomial-time adversary $A$ without the secret key, and every pair of indices $i \neq j$ in $\{0,\ldots,n-1\}$, $\bigl|\Pr[A(\textsc{Query}(\mathrm{pub},i,n))=1] - \Pr[A(\textsc{Query}(\mathrm{pub},j,n))=1]\bigr|$ is negligible.
+\end{definition}
+
+\textbf{Construction.} $\textsc{Query}(\mathrm{pub},i,n)$ returns $(c_0,\ldots,c_{n-1})$ with $c_k = \mathrm{Enc}_{\mathrm{pub}}(1)$ if $k=i$, else $\mathrm{Enc}_{\mathrm{pub}}(0)$, under Paillier.
+
+\begin{theorem}
+If Paillier is IND-CPA secure (equivalently, the Decisional Composite Residuosity (DCR) assumption holds for the modulus family used by \textsc{KeyGen}), then \textsc{Query} is index-private, with $\mathrm{Adv}_{\text{index-priv}}(A) \le 2\,\mathrm{Adv}_{\text{IND-CPA}}(B)$ for an IND-CPA adversary $B$ built from $A$.
+\end{theorem}
+
+\begin{proof}
+Fix $i \neq j$ and let $Q_i, Q_j$ denote the two query vectors. They agree everywhere except at positions $i$ and $j$: $Q_i$ has $(\mathrm{Enc}(1),\mathrm{Enc}(0))$ at positions $(i,j)$; $Q_j$ has $(\mathrm{Enc}(0),\mathrm{Enc}(1))$ at the same two positions. Define an intermediate hybrid $H$ with $(\mathrm{Enc}(0),\mathrm{Enc}(0))$ at positions $(i,j)$ (identical to both $Q_i$ and $Q_j$ everywhere else).
+
+$Q_i$ and $H$ differ only in the single ciphertext at position $i$: $\mathrm{Enc}(1)$ vs.\ $\mathrm{Enc}(0)$. Any adversary distinguishing $Q_i$ from $H$ with advantage $\epsilon_1$ yields an IND-CPA adversary $B_1$ against Paillier with the same advantage: $B_1$ submits $(1,0)$ as its IND-CPA challenge messages, receives back a challenge ciphertext $c^\ast$ encrypting one of them under an unknown bit $b$, places $c^\ast$ at position $i$, fills every other position (including $j$) with its own encryptions of $0$ using the public key, forwards the resulting vector to $A$, and outputs $A$'s guess as its own guess for $b$. By construction this vector is exactly $Q_i$ when $b=1$ and exactly $H$ when $b=0$, so $B_1$'s IND-CPA advantage equals $A$'s advantage in distinguishing $Q_i$ from $H$.
+
+Symmetrically, $H$ and $Q_j$ differ only in the single ciphertext at position $j$, giving an IND-CPA adversary $B_2$ with advantage $\epsilon_2$ equal to $A$'s advantage distinguishing $H$ from $Q_j$.
+
+By the triangle inequality,
+\[
+\bigl|\Pr[A(Q_i){=}1]-\Pr[A(Q_j){=}1]\bigr| \le \epsilon_1+\epsilon_2 \le 2\max(\mathrm{Adv}_{B_1},\mathrm{Adv}_{B_2}) = 2\,\mathrm{Adv}_{\text{IND-CPA}}(B),
+\]
+taking $B$ to be whichever of $B_1,B_2$ has the larger advantage. Since $\mathrm{Adv}_{\text{IND-CPA}}$ is negligible under the DCR assumption (Paillier's standard security reduction), the left-hand side is negligible.
+\end{proof}
+
+\noindent \emph{Scope.} This licenses exactly one guarantee: the server that answers a committed batch never learns, from the query ciphertexts themselves, which index is later retrieved, for any strategy it uses to decide how to answer. It says nothing about side channels outside this ciphertext-indistinguishability model (timing, response-size variation if database values differ in bit-length, or cross-round correlation by a server that logs every audit interaction) -- those are out of scope.
+
+\section*{Theorem 2 (Hypergeometric Slot-Hiding Bound)}
+
+\textbf{Setup.} A batch has $N$ slots; the auditor checks a uniformly random $P$-subset. An adversary, before learning which slots will be checked, tampers with some $m$-subset chosen independently of the auditor's random draw.
+
+\begin{theorem}
+$\displaystyle \Pr[\text{checked }P\text{-subset disjoint from tampered }m\text{-subset}] = \binom{N-m}{P}\Big/\binom{N}{P}.$
+\end{theorem}
+
+\begin{proof}
+The auditor's checked subset is uniform over all $\binom{N}{P}$ possible $P$-subsets of $[N]$, independent of the adversary's fixed choice. The event ``disjoint from the tampered $m$-subset'' holds exactly for the $P$-subsets drawn entirely from the $N-m$ untampered slots, of which there are $\binom{N-m}{P}$ by definition of the binomial coefficient. Since all $\binom{N}{P}$ subsets are equally likely, the stated probability follows. (This is $\Pr[X=0]$ for $X \sim \mathrm{Hypergeometric}(N,m,P)$, the standard hypergeometric mass function evaluated at $0$.)
+\end{proof}
+
+\noindent \textbf{Instantiation used in the main text.} For a real-cluster of $R$ paraphrased slots and $P=1$ (one member checked), an adversary hardcoding $m$ of the $R$ phrasings without knowing which will be checked evades with probability $(R-m)/R$, the $N{=}R,\,P{=}1$ special case above. This is verified in the implementation against brute-force enumeration over all $\binom{N}{P}\binom{N}{m}$ (protected, tampered) subset pairs for small $(N,P,m)$, as an implementation sanity check, independent of the proof above.
+
+\noindent \emph{Scope.} This bound is exact and distribution-free; it requires the adversary's tampered subset to be fixed before the auditor's random choice (guaranteed unknowable to the adversary in principle, by Theorem~1). It gives \emph{zero} protection against an adversary that tampers with all $R$ slots ($m=R$): $\Pr[\text{evade}]=0/R\cdot$ trivially in the complementary sense that every slot is compromised, which is exactly why the diversity channel (Proposition~1 below) exists as an independent, non-overlapping mechanism.
+
+\section*{Theorem 3 (Exact Finite-Sample Calibrated Threshold)}
+
+\textbf{Setup.} $X_1,\ldots,X_m \stackrel{\text{i.i.d.}}{\sim} \mathcal{N}(\mu,\sigma^2)$ (calibration replicates); $Y \sim \mathcal{N}(\mu,\sigma^2)$ independent (the real audit statistic, under the null). $\bar X = \tfrac{1}{m}\sum_i X_i$, $S^2 = \tfrac{1}{m-1}\sum_i (X_i-\bar X)^2$.
+
+\begin{theorem}
+$(Y-\bar X)/(S\sqrt{1+1/m}) \sim t_{m-1}$, so $\tau = \bar X + t_{m-1,1-\beta}\, S\sqrt{1+1/m}$ satisfies $\Pr[Y>\tau]=\beta$ exactly.
+\end{theorem}
+
+\begin{proof}
+$Y-\bar X$ is a linear combination of independent Gaussians ($Y$ independent of the calibration sample; $\bar X$ Gaussian as a sample mean), hence Gaussian, with mean $0$ and variance $\sigma^2 + \sigma^2/m = \sigma^2(1+1/m)$:
+\[
+Z := (Y-\bar X)\big/\bigl(\sigma\sqrt{1+1/m}\bigr) \sim \mathcal{N}(0,1).
+\]
+By Cochran's theorem applied to an i.i.d.\ Gaussian sample, $(m-1)S^2/\sigma^2 \sim \chi^2_{m-1}$ and is independent of $\bar X$ (a standard fact about the sample mean and sample variance of a Gaussian sample -- see e.g.\ Casella \& Berger, \emph{Statistical Inference}, Thm.\ 5.3.1). Since $Y$ is independent of the whole calibration sample, $(m-1)S^2/\sigma^2$ is also independent of $Z$. By definition, a standard normal divided by the square root of an independent $\chi^2_k/k$ is distributed $t_k$:
+\[
+\frac{Y-\bar X}{S\sqrt{1+1/m}} = \frac{Z}{\sqrt{\bigl((m-1)S^2/\sigma^2\bigr)/(m-1)}} \sim t_{m-1}.
+\]
+Hence $\Pr[Y>\tau] = \Pr[t_{m-1} > t_{m-1,1-\beta}] = \beta$ by definition of the $(1-\beta)$-quantile.
+\end{proof}
+
+\noindent \textbf{Corollary (strict looseness and convergence, not separately numbered in the main text).} For every finite $m \ge 2$ and $\beta \in (0,1/2)$, the exact predictive quantile $q(\beta,m) := t_{m-1,1-\beta}\sqrt{1+1/m}$ strictly exceeds the asymptotic $z$-quantile $z_{1-\beta}$, and $q(\beta,m) \to z_{1-\beta}$ as $m\to\infty$.
+
+\begin{proof}
+$t_{m-1,1-\beta} > z_{1-\beta}$ for every finite degrees of freedom (the Student-$t$ distribution has strictly heavier tails than the standard normal at every finite degree of freedom), and $\sqrt{1+1/m} > 1$ for finite $m$. Both factors of $q(\beta,m)$ strictly exceed their limiting values, so their product strictly exceeds $z_{1-\beta}\cdot 1$. As $m\to\infty$, $t_{m-1,1-\beta}\to z_{1-\beta}$ (standard asymptotic normality of the Student-$t$ family) and $\sqrt{1+1/m}\to 1$, so the product converges to $z_{1-\beta}$.
+\end{proof}
+
+\noindent \emph{Scope.} This is exact given the Gaussian idealization of the calibration replicates and the real audit statistic under the null; it is not verified that the empirical distributions of loss gaps, watermark $z$-scores, or diversity ratios used in the experiments are exactly Gaussian. At $m=2$ (this paper's LLM-track minimum), the correction is severe: $t_{1,0.95}\sqrt{1.5} \approx 7.73$ versus $z_{0.95}\approx1.64$, a $\sim$4.7$\times$ widening -- consistent with the empirical false-accusation-rate drop reported in Table~4 of the main text.
+
+\section*{Proposition 1 (Exact Zero Diversity under Uniform Suppression)}
+
+\begin{definition}[Uniform canned suppression]
+A server \emph{uniformly suppresses} topic $f$ if there exists a single fixed string $r$ such that its response to every prompt mentioning $f$, however phrased, is exactly $r$.
+\end{definition}
+
+\begin{proposition}
+If a server uniformly suppresses topic $f$, then for any real-cluster retrieval of $R\ge2$ prompts about $f$, the mean pairwise Hamming diversity of their SimHash fingerprints is exactly $0$.
+\end{proposition}
+
+\begin{proof}
+Every response is the identical string $r$, so every response's token sequence is identical, so the (deterministic) SimHash function returns the identical fingerprint for every response in the cluster. Every pairwise Hamming distance is computed between two identical fingerprints, i.e.\ $\mathrm{popcount}(0)=0$, for every pair; the mean of an all-zero list is $0$.
+\end{proof}
+
+\noindent \emph{A near-collision bound.} Under any non-degenerate response distribution (genuine generation about an unfamiliar or forgotten topic), two independently-sampled generations collapsing to bit-identical $b$-bit SimHash fingerprints by chance has probability at most $2^{-b}$ per pair, by SimHash's locality-sensitive-hashing guarantee (Charikar, STOC 2002) that only near-identical inputs collide with non-negligible probability; at $b=32$ this is negligible for any practical cluster size, so a nonzero calibrated diversity threshold generically separates genuine generation from uniform suppression whenever it is not itself degenerate (see the main text's discussion of small-$N_{\text{calib}}$ threshold instability).
+
+\noindent \emph{Scope.} This is an exact, unconditional guarantee for literal, uniform, single-string suppression -- not a general robustness claim. It says nothing about a server that introduces any content-preserving variation across canned replies to defeat SimHash's near-duplicate detection without restoring genuine informativeness; that arms race is out of scope.
+
+\section*{Theorem 4 (Bonferroni Composition, and the Bug It Caught)}
+
+\textbf{Setup.} A certificate flags dishonesty as the logical OR of $k$ independently-calibrated conditions, each individually controlled at some level $\beta_i$ via Theorem~3 (i.e.\ $\Pr[\text{condition }i\text{ fires}\mid\text{honest}]=\beta_i$ exactly, under the Gaussian idealization).
+
+\begin{theorem}
+$\Pr[\text{decision}=\text{dishonest}\mid\text{honest}] \le \sum_{i=1}^{k}\beta_i$, with equality only if the $k$ events are mutually exclusive.
+\end{theorem}
+
+\begin{proof}
+Immediate from Boole's inequality (the union bound) applied to the $k$ events ``condition $i$ fires,'' which requires no assumption about their dependence structure.
+\end{proof}
+
+\noindent \textbf{Corollary (design rule, not separately numbered in the main text).} Guaranteeing an overall false-accusation rate of at most $\beta_{\text{target}}$ requires $\sum_i\beta_i \le \beta_{\text{target}}$; the simplest sufficient choice is the even split $\beta_i=\beta_{\text{target}}/k$ for all $i$.
+
+\noindent \textbf{The bug this caught.} SEAL's classical-track certificate already implements this design rule for its two channels ($\beta_{\text{per-channel}}=\beta_{\text{target}}/2$). Prior to writing this proof, SEAL-W's certificate did not: it calibrated all $k{=}4$ conditions (slot channel, diversity channel, positive-canary check, negative-canary check) at the same, un-split $\beta_{\text{target}}$, which by the theorem above only bounds the true false-accusation rate at $k\beta_{\text{target}} = 4\beta_{\text{target}}$ -- a $4\times$ looser guarantee than the stated design target of $\beta_{\text{target}}=0.10$. This was found by writing the theorem down and checking the implementation against it, not by an experiment producing visibly anomalous output, and is fixed in the version of SEAL-W evaluated in the main text: $\beta_i = \beta_{\text{target}}/n$, where $n$ counts only the conditions actually calibrated (at $\beta_i$) in a given decision -- a condition compared against an externally-fixed constant rather than a calibrated threshold does not consume part of the split.
+
+\noindent \emph{Scope.} The union bound is exact and assumption-free, but loose whenever the $k$ conditions are positively correlated -- the realistic case here, since a genuinely dishonest server that trips one channel often also trips a canary check. The even Bonferroni split is therefore a \emph{safe, conservative} correction (it cannot exceed the target rate) rather than a \emph{tight, optimal} one; a matched test accounting for the channels' empirical correlation structure is a genuinely open refinement, not attempted here, and would only ever loosen the correction back toward $\beta_{\text{target}}$, never justify omitting it.
+
+\end{document}

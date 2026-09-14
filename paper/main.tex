@@ -1,0 +1,266 @@
+\documentclass[10pt,journal,compsoc]{IEEEtran}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+
+\begin{document}
+
+\title{SEAL: Statistically-Bounded Erasure Audits for Machine Unlearning under Mutual Distrust}
+
+\author{Quang-Vinh~Dang
+\thanks{Q.-V. Dang is with British University Vietnam, Hung Yen, Vietnam (e-mail: vinh.dq4@buv.edu.vn). ORCID: 0000-0002-3877-8024.}
+}
+
+\markboth{IEEE Transactions on Information Forensics and Security}{}
+
+\maketitle
+
+\begin{abstract}
+A data owner who submits an erasure request to a machine learning system operator has no direct way to verify that the request was honored, and the operator has no incentive to volunteer proof of noncompliance. Prior work shows that any audit accurate enough to catch a dishonest operator necessarily leaks information about the retained population, but stops short of a mechanism a mutually distrusting pair can actually run. This paper presents SEAL, a two-channel erasure-audit certificate that separates a zero-privacy-cost check on the data owner's own forgotten records from a differential-privacy-bounded check on synthetic boundary probes, calibrated against replicated honest re-executions rather than assumed thresholds, and its counterpart SEAL-W for large language model unlearning, which retrieves a randomly chosen member of a paraphrased query cluster through real Paillier-based private information retrieval and cross-checks response diversity against a phantom-topic baseline. We give five theorems establishing exactly what each channel provably defeats -- private information retrieval obliviousness under the decisional composite residuosity assumption, a hypergeometric bound on a resource-limited adversary's evasion probability, an exact finite-sample calibrated threshold, a zero-diversity guarantee against uniform response suppression, and a Bonferroni-corrected composition bound whose absence we found and fixed in our own implementation while writing this proof. We reproduce the verification methodology of WaterDrum, the closest prior watermark-based unlearning audit, as an explicit baseline, and show empirically that it is defeated by a server that detects and filters the audit query itself -- the exact gap WaterDrum's own authors report as unsolved -- while SEAL-W's diversity channel catches it. Experiments on federated logistic regression over UCI German Credit, MNIST, and a 150{,}000-row Forest Covertype subsample, and on a real fine-tuned language model audited over the real TOFU fictitious-author benchmark, report both power and honestly-measured failure modes at small calibration-sample sizes, rather than tuning them away.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Machine unlearning, differential privacy, private information retrieval, text watermarking, auditing, federated learning, right to be forgotten.
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+Data-protection regulation gives individuals a right to have their data erased from systems trained on it \cite{gdpr2016}. When the system is a machine-learned model, ``erasure'' is a claim about a training procedure the data owner cannot observe: the model operator asserts that a retraining or fine-tuning step removed the record's influence, and the data owner must decide whether to believe it. This is not a benign estimation problem. The operator may find honest unlearning expensive and have every incentive to claim compliance while changing nothing (\emph{lazy} noncompliance), or to narrowly patch only the behavior an audit is expected to probe while leaving the record's broader influence untouched (\emph{targeted spoofing}).
+
+Two recent results sharpen why this is hard rather than merely inconvenient. Tang, Joshi, and Kundu give an information-theoretic argument that, for convex models, any audit relying only on the model's behavior (query-response pairs) cannot separate an honestly-unlearned model from an insufficiently-unlearned one without revealing membership information about the retained set \cite{tang2026geometric} -- there is an unavoidable trade-off between how powerful a behavioral audit is and how much it leaks about records the data owner was never entitled to see. Nguyen et al.'s veriFUL framework independently surveys the federated-unlearning-verification landscape and concludes that no proposed scheme yet gives a federation of mutually distrusting clients and servers a concrete, run-once verification protocol with a stated privacy cost \cite{nguyen2025veriful}. Both papers characterize the problem; neither gives an auditor a mechanism to run.
+
+\subsection{Contributions}
+
+This paper's contribution is a concrete audit protocol -- not a new impossibility result, and not a claim to have invented differential privacy, private information retrieval (PIR), or text watermarking. It is the specific combination of known primitives into a certificate that (i) makes the audit power/privacy-leakage trade-off in \cite{tang2026geometric} a dial the data owner turns rather than an unavoidable fact they simply accept, and (ii) instantiates that dial concretely for two settings veriFUL leaves open: federated classical-ML unlearning, and large-language-model unlearning verified via watermarking. Concretely:
+
+\begin{enumerate}
+\item A two-channel certificate (SEAL) that separates a \emph{zero-marginal-privacy-cost} channel -- the data owner re-evaluates the model on data it already possesses in full, which costs no retained-set privacy at all -- from a \emph{tunable-privacy-cost} channel using Gaussian-mechanism-noised synthetic boundary probes, whose spend is set by a stated $(\varepsilon,\delta)$ budget (Section~\ref{sec:seal}).
+\item A calibration procedure that builds each channel's null distribution from literal re-executions of the honest mechanism, matched to the real run's base seed and per-client ordering, rather than an assumed parametric null -- a detail we show empirically is not optional (Section~\ref{sec:seal}).
+\item SEAL-W, a watermark-based certificate for LLM unlearning that plants several independently-paraphrased queries about the same forgotten entity in a committed batch, retrieves one at random via real Paillier-based PIR, and adds an independent response-diversity channel targeting exactly the adversary class -- uniform, topic-level output filtering -- that a single-query watermark check structurally cannot catch (Section~\ref{sec:sealw}).
+\item An explicit reproduction of WaterDrum's verification methodology \cite{lu2026waterdrum} as a first-class experimental baseline, and a demonstration that it is defeated by exactly the server behavior its own authors report as an open problem, while SEAL-W's diversity channel is not (Section~\ref{sec:waterdrum-comparison}).
+\item Five theorems with complete proofs (Section~\ref{sec:theory}; full derivations in the supplemental material) establishing precisely, and only, what each channel is proven to defeat -- including a composition bound whose violation we found in our own first implementation by writing the proof down, not by an experiment failing visibly, and subsequently fixed.
+\item An empirical evaluation (Section~\ref{sec:experiments}) on three classical-ML datasets spanning three orders of magnitude in per-client data volume, and on a real fine-tuned language model audited over the real TOFU fictitious-author benchmark \cite{maini2024tofu}, reporting failure modes -- including a benchmark-scale finding that audit power \emph{degrades} as per-client data grows -- as honestly as the successes.
+\end{enumerate}
+
+Every individual primitive reused here -- the Gaussian mechanism and zero-concentrated differential privacy (zCDP) accounting \cite{bun2016concentrated}, Paillier-based PIR \cite{paillier1999}, the Kirchenbauer et al. green-list watermark \cite{kirchenbauer2023watermark}, and the general oblivious-audit-via-PIR pattern of RESPIR \cite{godinot2026respir} -- is standard and cited rather than re-derived, per the guidance that theoretical derivations already published elsewhere belong in the reference list, not repeated. What is new is their specific composition into a certificate that answers a stated open problem in the unlearning-verification literature, and the formal accounting of exactly which adversary class each piece of that composition defeats.
+
+\section{Related Work}
+
+\textbf{Unlearning verification.} Tang et al.'s geometric transfer theorem \cite{tang2026geometric} and Nguyen et al.'s veriFUL survey \cite{nguyen2025veriful} are the two works this paper answers most directly, as discussed above. Neither proposes a runnable mechanism with a stated privacy budget for a mutually distrusting auditor and server.
+
+\textbf{Watermark-based data provenance.} Kirchenbauer et al. introduce a keyed, context-seeded green/red vocabulary partition for LLM generation, detected via a z-test on the green-token fraction \cite{kirchenbauer2023watermark}; Lau et al.'s Waterfall generalizes this to a vocabulary-permutation-and-perturbation scheme applied via an LLM paraphraser, for robust large-scale text provenance \cite{lau2024waterfall}. Lu et al.'s WaterDrum applies this family of watermarks specifically to unlearning verification, and is the closest prior work to SEAL-W \cite{lu2026waterdrum}; its own Appendix explicitly states that a server which detects and filters the watermark check itself is not handled by their construction. Section~\ref{sec:waterdrum-comparison} reproduces this gap directly rather than only citing it.
+
+\textbf{Oblivious auditing via PIR.} Godinot et al.'s RESPIR uses lattice-based PIR to let an auditor commit to a batch of candidate queries and retrieve a checked subset obliviously, with planted canaries as tamper sentinels, for fairness audits of a deceptive model provider \cite{godinot2026respir}. SEAL-W adopts this committed-batch-with-canaries pattern but uses Paillier-based, single-server PIR \cite{paillier1999} -- simpler and adequate at the batch sizes (tens of candidates) used here -- and targets unlearning verification rather than fairness.
+
+\textbf{Differential privacy accounting.} Channel B's privacy cost is accounted via zero-concentrated differential privacy \cite{bun2016concentrated}; the Gaussian differential privacy / $f$-DP framework of Dong, Roth, and Su \cite{dong2022gdp} gives the general Neyman--Pearson-optimal tradeoff curve between a test's power and its leakage for a mechanism with known noise, of which our finite-calibration setting is a harder special case (the auditor does not know the mechanism's parameters exactly, only a calibration sample) that we do not claim to solve in general.
+
+\textbf{Influence-based spoofing detection.} Channel B's ability to catch narrow, targeted fine-tuning (rather than genuine retraining) that a zero-cost own-data check cannot rests on the same intuition as Koh and Liang's influence functions \cite{koh2017influence}: honest retraining moves the loss on a forgotten record's \emph{neighborhood}, not only the record itself, while a narrowly targeted fine-tune does not.
+
+\section{Threat Model and Problem Formulation}
+\label{sec:threat}
+
+A data owner (or a regulator acting on its behalf) submitted a request to erase a record set $D_f$ from a model trained by an operator (``the server'') on $D = D_f \cup D_r$. The server returns a model $M'$ and claims $D_f$'s influence is gone. The data owner does not trust the server and cannot inspect $M'$'s weights or training log. Three server behaviors are in scope, of increasing sophistication: (i) \emph{honest} retraining or fine-tuning that genuinely excludes $D_f$; (ii) \emph{lazy} noncompliance, continuing to train on all of $D$ including $D_f$; (iii) \emph{targeted spoofing}, fine-tuning only on $D_f$ (or, for SEAL-W, output-filtering only queries the server can recognize) to fool a specific, anticipated check while leaving broader influence intact. The data owner's goal is a decision rule, calibrated to a stated false-accusation rate $\beta$, together with a stated bound on how much the decision process reveals about $D_r$ -- which the data owner does not know and is not entitled to learn.
+
+\section{SEAL: Auditing Classical Federated Unlearning}
+\label{sec:seal}
+
+\subsection{Two-Channel Certificate}
+
+Let $\theta,\theta'$ be the model's parameters before and after the claimed unlearning step, and $l(\theta,x,y)$ the per-sample loss.
+
+\textbf{Channel A (zero cost).} The data owner computes $\Lambda_A = \text{mean}_{(x,y)\in D_f}\left[l(\theta',x,y) - l(\theta,x,y)\right]$ entirely on data it already possesses. No noise is added and no privacy budget is spent, because the released quantity is a function only of the requester's own data and the public model.
+
+\textbf{Channel B (tunable cost).} The data owner perturbs its own forgotten records into synthetic boundary probes $x_i + \epsilon_j$, $\epsilon_j \sim \mathcal{N}(0,\text{jitter}^2 I)$, and asks the server to evaluate $M'$ on them, label held fixed. Each returned per-probe loss is clipped to $[0,L_{\max}]$ and released through a Gaussian mechanism at noise level $\sigma$, giving $\Lambda_B$ analogous to $\Lambda_A$ but over the noised probe losses. Because the probes are synthetic points constructed by the auditor from its own data -- not real retained records -- the Gaussian mechanism's sensitivity bound applies directly, and zCDP composition over $B$ probes gives $\rho_{\text{total}} = B L_{\max}^2/(2\sigma^2)$, converted to $(\varepsilon,\delta)$ via $\varepsilon = \rho_{\text{total}} + 2\sqrt{\rho_{\text{total}}\ln(1/\delta)}$ \cite{bun2016concentrated}. Given a target $(\varepsilon,\delta)$, this inverts to the noise level $\sigma$ the server's responses must carry -- turning the impossibility of \cite{tang2026geometric} into a dial: choosing $\varepsilon$ fixes exactly how much retained-set privacy this audit round may cost.
+
+\subsection{Calibration}
+
+Both channels are compared against a null distribution built by literally re-executing the honest procedure $R$ times, on a disjoint public calibration corpus standing in for $D_f$, using the \emph{same base random seed and per-client ordering} as the real training run. This detail is not cosmetic: warm-starting a calibration replicate from an already-converged model, or varying the base seed across replicates, under-integrates or adds spurious trajectory variance to the null and produces a degenerate, near-zero-variance threshold in our own early implementation attempts (Section~\ref{sec:theory} gives the corrected, exact threshold this null feeds into).
+
+\section{SEAL-W: Auditing LLM Unlearning}
+\label{sec:sealw}
+
+A data owner contributed watermarked text (via \cite{kirchenbauer2023watermark}, keyed per contributor) that was used to fine-tune a language model, and wants to check a claimed erasure of its influence.
+
+\subsection{Why a Cluster, Not One Query}
+
+A server recognizing one exact known trigger string is defeated by any paraphrase. A smarter server can instead recognize the \emph{topic} (the forgotten entity's name, however worded) and either suppress every phrasing uniformly, or hardcode canned replies for only a guessed subset of phrasings it can afford. Neither a single paraphrased query nor PIR alone defeats either variant: against uniform suppression there is no ``which slot is checked'' secret worth hiding, since the server treats every phrasing alike; against the resource-bounded guesser, hiding which slot is checked is exactly the right game, but requires more than one real query to hide among.
+
+\subsection{Protocol}
+
+\textbf{Commit.} The auditor assembles a candidate batch: an $R$-member \emph{real cluster} of independently-paraphrased queries about the forgotten entity, one positive-control canary query about a known-retained entity, an $R$-member \emph{negative-canary cluster} of paraphrased queries about a phantom entity never present in any training data, and decoy queries about other retained entities. The server answers every query -- it cannot yet tell which will be checked. Each answer's watermark $z$-score \cite{kirchenbauer2023watermark} and a 32-bit SimHash response fingerprint \cite{charikar2002simhash} are quantized to integers and committed via a SHA-256 hash over both arrays, so the server cannot revise an answer once it learns what matters.
+
+\textbf{Retrieve.} The auditor retrieves, via real single-server Paillier PIR \cite{paillier1999}: one uniformly-random real-cluster member's $z$-score (chosen only now, not at commit time), the positive canary, every negative-canary-cluster member (for the diversity baseline), and every real-cluster fingerprint.
+
+\textbf{Decide.} Two independent channels, plus canary sanity checks. The \emph{slot channel} flags if the one retrieved real-cluster $z$-score exceeds a calibrated upper threshold. The \emph{diversity channel} flags if the real cluster's mean pairwise Hamming diversity, relative to the phantom cluster's, falls below a calibrated lower threshold. Both thresholds, and the two canary sanity bounds, are calibrated from held-out calibration authors exactly as in Section~\ref{sec:seal}, with the false-accusation budget $\beta_{\text{target}}$ split across all active conditions (Theorem~\ref{thm:bonferroni}).
+
+\section{Reproducing and Breaking WaterDrum}
+\label{sec:waterdrum-comparison}
+
+WaterDrum's verification methodology -- watermark a contribution, then test whether post-unlearning generations still carry the watermark -- is, architecturally, exactly SEAL-W's slot channel run in isolation: one canonical (unparaphrased) query, one watermark score, one calibrated threshold, no diversity channel, no real-cluster. We implement this literal reduction as an explicit baseline (\texttt{waterdrum\_baseline\_decide}) and run it side by side with the full SEAL-W decision on the same fine-tuned model and the same four server behaviors, honestly noting one substitution: WaterDrum's own implementation embeds its watermark via Waterfall's paraphraser-and-permutation scheme \cite{lau2024waterfall}, while we use the simpler Kirchenbauer green-list watermark \cite{kirchenbauer2023watermark} throughout, for tractability on the CPU-only hardware used in our experiments. This substitution does not change the point demonstrated below: the failure mode is about a server detecting and filtering the audit \emph{query}, not about either watermark's own robustness to paraphrasing.
+
+Table~\ref{tab:waterdrum} reports the result against a server that uniformly suppresses every query mentioning the forgotten entity's name (\texttt{topic\_filter}). Every trial shows the real cluster's response diversity collapsing to \emph{exactly} zero (Proposition~\ref{prop:zerodiv} proves this must happen, not merely that it tends to), and in the one trial where the calibration sample was not itself too degenerate to support any confident call, SEAL-W's diversity channel flags the attack while the WaterDrum-equivalent single-query check does not -- reading a filtered, non-watermarked canned reply as indistinguishable from genuine forgetting. This is precisely the false negative WaterDrum's Appendix D reports as unsolved, reproduced directly against the mechanism built to exploit it, not merely cited.
+
+\begin{table}[t]
+\centering
+\caption{WaterDrum-equivalent baseline vs.\ full SEAL-W against \texttt{topic\_filter}, per trial ($N_{\text{calib}}=2$, $\beta_{\text{target}}=0.10$).}
+\label{tab:waterdrum}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Trial & Real-cluster diversity & SEAL-W flags & WaterDrum-baseline flags \\
+\midrule
+0 & 0.0 (threshold $-1.02$) & No & Yes (also flags honest) \\
+1 & 0.0 (threshold $-0.38$) & No & No \\
+2 & 0.0 (threshold $+0.46$) & \textbf{Yes} & No \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Trials 0 and 1 illustrate a second, independent finding: at $N_{\text{calib}}=2$, the Bonferroni-corrected threshold (Theorem~\ref{thm:bonferroni}) can itself land below zero, so even the true, exact-zero diversity ratio this adversary always produces is not always low enough to cross it. This is not a defect specific to WaterDrum-style checks; it is the same finite-calibration-sample limitation that governs every threshold in this paper, surfacing here in the one comparison built specifically to expose it.
+
+\section{Theoretical Guarantees}
+\label{sec:theory}
+
+We state five results precisely; complete proofs are in the supplemental material. Each states exactly, and only, what it establishes.
+
+\begin{theorem}[PIR obliviousness]
+\label{thm:pir}
+If Paillier is IND-CPA secure (equivalently, the Decisional Composite Residuosity assumption holds), then for any two indices $i \neq j$ in an $n$-slot database, the one-hot-encrypted PIR query for $i$ is computationally indistinguishable from that for $j$, with $\text{Adv}_{\text{index-priv}}(A) \le 2\,\text{Adv}_{\text{IND-CPA}}(B)$ for an adversary $B$ built from $A$ via a two-hybrid argument.
+\end{theorem}
+
+\begin{theorem}[Hypergeometric slot-hiding bound]
+\label{thm:hypergeom}
+For a batch of $N$ slots, $P$ of which the auditor checks (uniformly at random, independent of the adversary's choice), and an adversary that tampers with $m$ slots before learning which will be checked,
+$$\Pr[\text{checked slots} \cap \text{tampered slots} = \emptyset] = \binom{N-m}{P}\Big/\binom{N}{P}.$$
+\end{theorem}
+
+\begin{theorem}[Exact finite-sample calibrated threshold]
+\label{thm:predquantile}
+Let $X_1,\ldots,X_m \sim \mathcal{N}(\mu,\sigma^2)$ i.i.d.\ (calibration replicates) and $Y \sim \mathcal{N}(\mu,\sigma^2)$ independent (the real audit statistic under the null). Then $(Y-\bar X)/(S\sqrt{1+1/m}) \sim t_{m-1}$, so $\tau = \bar X + t_{m-1,1-\beta}\, S\sqrt{1+1/m}$ satisfies $\Pr[Y>\tau]=\beta$ exactly. This threshold strictly exceeds the asymptotic $z$-quantile plug-in at every finite $m$, and converges to it as $m\to\infty$.
+\end{theorem}
+
+\begin{proposition}[Exact zero diversity under uniform suppression]
+\label{prop:zerodiv}
+If a server answers every query mentioning a topic with one fixed string, then for any real-cluster retrieval of $R\ge2$ such queries, the mean pairwise SimHash Hamming diversity is exactly $0$.
+\end{proposition}
+
+\begin{theorem}[Bonferroni composition, and the bug it caught]
+\label{thm:bonferroni}
+If a certificate's dishonesty decision is the logical OR of $k$ independently-calibrated conditions each controlled at level $\beta_i$, the overall false-accusation rate is bounded by $\sum_i \beta_i$ (Boole's inequality), so a target rate $\beta_{\text{target}}$ requires $\beta_i = \beta_{\text{target}}/k$. Our first SEAL-W implementation calibrated all $k{=}4$ conditions (slot, diversity, two canary checks) at the same, un-split $\beta_{\text{target}}$, bounding the true rate only at $4\beta_{\text{target}}$ -- a gap found by writing this theorem down and checking the code against it, not by an experiment failing visibly, and fixed prior to the experiments reported here.
+\end{theorem}
+
+\section{Experimental Evaluation}
+\label{sec:experiments}
+
+\subsection{Classical Track}
+
+Federated multinomial-logistic/softmax models are trained across 5 simulated clients on three datasets of increasing scale: UCI German Credit (a bank-consortium right-to-be-forgotten instantiation, $\sim$40-record forget sets), MNIST (5{,}000-sample subset, 784-dim), and a 150{,}000-row subsample of UCI Forest Covertype (54-dim, $\sim$30{,}000 rows/client). Table~\ref{tab:classical} reports detection power against \emph{lazy} noncompliance (power at which SEAL's zero-cost Channel~A alone separates honest from lazy) against two baselines: raw parameter distance, and an unrestricted behavioral audit in the style of \cite{tang2026geometric}.
+
+\begin{table}[t]
+\centering
+\caption{Detection power vs.\ lazy noncompliance (Channel A alone, zero privacy cost) vs.\ two baselines.}
+\label{tab:classical}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Dataset & Parameter-diff & Unrestricted behavioral & SEAL (Channel A) \\
+\midrule
+German Credit & 0.743 & 0.553 & \textbf{0.920} \\
+MNIST & 0.597 & 0.500 (chance) & \textbf{1.000} \\
+Covertype (150k) & 0.610 & 0.510 & 0.540 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At higher input dimension (MNIST), the unrestricted behavioral baseline performs at exact chance: broad queries over a 784-dimensional retained population dilute one client's $\sim$50 forgotten records into noise, exactly the diffuseness \cite{tang2026geometric}'s theorem predicts costs power. SEAL's zero-cost channel needs no such broad query and reaches 1.000.
+
+Table~\ref{tab:spoof} reports the designed power/privacy-leakage tradeoff against \emph{targeted spoofing} (fine-tuning only on $D_f$), across a sweep of Channel~B's privacy budget $\varepsilon$, together with retained-set leakage measured as the empirical membership-inference attack AUC an adversary achieves given exactly what Channel~B releases. SEAL's power climbs monotonically with $\varepsilon$ toward the unbounded-noise limit, while leakage stays close to chance (0.50--0.54) across the whole sweep on German Credit and MNIST -- with the label-preserving synthetic probes used here, the near-neighbor membership signal is intrinsically weak at these datasets' scale (small forget sets, $\sim$40--50 records), so a tight $\varepsilon$ does not have to suppress much signal in the first place. Parameter-diff also catches this specific spoof at zero accounted privacy cost, but only because the spoof mechanism used here is an aggressive, large, narrowly-directed parameter update; a subtler spoof would not show up in parameter distance at all, and there is no way to know which regime a real deployment is in without an audit like Channel~B's.
+
+\begin{table}[t]
+\centering
+\caption{SEAL Channel B: power vs.\ targeted spoofing and retained-set leakage (attack AUC), across privacy budget $\varepsilon$.}
+\label{tab:spoof}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+$\varepsilon$ & German Credit power & MNIST power & Leakage (AUC, both) \\
+\midrule
+0.05 & 0.525 & 0.542 & 0.50--0.53 \\
+0.50 & 0.528 & 0.556 & 0.50--0.53 \\
+1.0  & 0.538 & 0.556 & 0.50--0.53 \\
+4.0  & 0.583 & 0.653 & 0.50--0.53 \\
+$10^{6}$ (no noise) & 1.000 & 1.000 & 0.50--0.53 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Covertype's result is reported as a genuine, honest limitation, not tuned away: at $\sim$30{,}000 rows/client, SEAL's own-data channel loses most of its power (0.540, barely above the 0.500 chance line and the two baselines), because a federation with far more data per client is intrinsically more robust to losing any one client's contribution -- the audit signal ``did removing this data change how well the model fits it'' is weakest exactly where the model has the most other data to fall back on.
+
+The certificate's calibrated single-instance decision (Theorem~\ref{thm:predquantile}'s exact threshold) is more conservative than the raw statistic: German Credit's false-accusation rate fell from 0.15 to 0.10 and MNIST's from 0.083 to 0.0 after replacing the asymptotic $z$-quantile plug-in with the exact predictive quantile, with no change to the Monte-Carlo power numbers above (those do not depend on the threshold formula).
+
+\subsection{LLM Track}
+
+\texttt{distilgpt2} is fine-tuned (CPU-only) on watermarked biographies of fictitious authors drawn from the real TOFU benchmark \cite{maini2024tofu}, audited by SEAL-W against four server behaviors of increasing sophistication (\emph{lazy}, exact-string \emph{filter-only}, uniform \emph{topic-filter}, and a resource-bounded \emph{partial topic-filter} that guesses 50\% of a 5-member paraphrase pool). Table~\ref{tab:llmprogression} tracks four successive, honestly-measured threshold fixes on the same experiment.
+
+\begin{table}[t]
+\centering
+\caption{Successive certificate fixes, same experiment (3 trials, $N_{\text{calib}}{=}2$).}
+\label{tab:llmprogression}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Version & False-accusation rate & Detection: topic-filter \\
+\midrule
+Hardcoded canary floor & 1.0 (degenerate) & 1.0 \\
+Calibrated, asymptotic $z$ & 0.667 & 1.0 \\
+Calibrated, exact Student-$t$ & 0.333 & 0.667 \\
++ Bonferroni split (Thm.~\ref{thm:bonferroni}) & \textbf{0.0} & 0.333 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Each fix moves both numbers in the direction the corresponding theorem predicts \emph{before} it was run: an exact threshold cannot manufacture confidence a small calibration sample does not support, so tightening the threshold to be exact, and then to be correctly composed across channels, necessarily costs detection power as it removes false accusations.
+
+Table~\ref{tab:llmfull} reports the final, Bonferroni-corrected certificate's detection rate against all four server behaviors, together with the diversity channel's rate in isolation and the resource-bounded adversary's analytic evasion prediction. The partial-topic-filter adversary's empirical detection rate (0.333) is consistent with the exact analytic hypergeometric prediction (Theorem~\ref{thm:hypergeom}: $1-0.6=0.4$, for $R{=}5$ paraphrase templates and $m{=}3$ guessed) within this trial count's sampling noise -- the one place in this evaluation where a component is checked against a closed-form formula rather than only Monte Carlo. The WaterDrum-comparison result (Section~\ref{sec:waterdrum-comparison}, Table~\ref{tab:waterdrum}) is drawn from this same final run.
+
+\begin{table}[t]
+\centering
+\caption{Full SEAL-W certificate, final (Bonferroni-corrected) version, all four server behaviors (3 trials, $N_{\text{calib}}{=}2$, $\beta_{\text{target}}{=}0.10$).}
+\label{tab:llmfull}
+\begin{tabular}{@{}lc@{}}
+\toprule
+Server behavior & Detection rate \\
+\midrule
+Honest (false-accusation rate) & 0.0 \\
+Lazy (keeps training on everything) & 0.333 \\
+Filter-only (exact-string canned reply) & 0.667 \\
+Topic-filter (uniform suppression) & 0.333 \\
+\quad -- diversity channel alone & 0.333 \\
+Partial topic-filter (guesses 50\% of $R{=}5$) & 0.333 \\
+\quad -- analytic evasion probability & 0.6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This 3-trial, $N_{\text{calib}}{=}2$ regime is small by design: each trial fine-tunes and audits a real language model on CPU-only hardware, and every rate above should be read as ``roughly this many out of 3,'' not a precise estimate -- the qualitative pattern (which mechanism is caught by which channel, and that both fixes moved every rate in the theoretically-predicted direction) is the result this scale supports, not the exact percentages. Section~\ref{sec:discussion} returns to this as the paper's central open lever.
+
+\section{Implementation and Reproducibility}
+
+Every mechanism, channel, and adversary discussed above is implemented, not simulated: the federated softmax model and both classical-track channels are pure-Python/NumPy; the LLM track fine-tunes a real \texttt{distilgpt2} checkpoint via PyTorch/Hugging Face Transformers; the watermark is the published green-list construction \cite{kirchenbauer2023watermark}, not a proxy for it; and SEAL-W's PIR is a real Paillier implementation (the \texttt{phe} library), with the auditor's queries genuinely encrypted end-to-end rather than the obliviousness property being asserted without a corresponding cryptographic artifact. All four adversary mechanisms (lazy, filter-only, topic-filter, partial-topic-filter) share identical underlying model weights within each experiment -- a single ``kept training on everything, never actually unlearned'' fine-tune -- differing only in the output-filtering wrapper placed over it, so that the comparison isolates what each certificate channel can detect rather than accidentally comparing different models. The full implementation, experiment scripts, and raw per-trial result files are available at \url{https://github.com/vinhqdang/SEAL-Statistically-bounded-Erasure-Audit-under-mutuaL-distrust}; the paper's numbered theorem statements are additionally restated with complete, checkable proofs in the supplemental material.
+
+\section{Discussion and Limitations}
+\label{sec:discussion}
+
+The remaining gap between SEAL(-W)'s design and its measured single-instance reliability is governed by calibration-sample size, not by the threshold formula: Theorem~\ref{thm:predquantile}'s correction is exact given the Gaussian idealization of the calibration replicates, but at $N_{\text{calib}}=2$ (this paper's LLM-track minimum) which two replicates happen to be drawn dominates the resulting threshold more than the mechanism under test does. Covertype's power loss is a genuine, dataset-scale-dependent limitation of the own-data channel, not a universal one. Neither SEAL-W channel defeats a hypothetical server with a perfect, costless semantic classifier willing to refuse all queries -- ordinary and audit alike -- about an entity; this is the same scope boundary \cite{tang2026geometric}'s own impossibility framing draws for behavioral audits in general, not a weaker standard adopted here.
+
+\section{Conclusion}
+
+SEAL and SEAL-W give a mutually distrusting data owner and model operator a concrete, calibrated, formally-scoped audit certificate where prior work characterized the problem's difficulty without a mechanism to run. Reproducing WaterDrum's verification methodology as an explicit baseline shows it inherits a specific, previously-only-stated blind spot that SEAL-W's independent diversity channel closes; five proven theorems state precisely, and only, what is guaranteed; and the experimental evaluation reports where the certificate's power degrades -- at large per-client data scale, and at small calibration-sample size -- as plainly as where it succeeds.
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

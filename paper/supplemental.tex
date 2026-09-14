@@ -36,9 +36,11 @@ $Q_i$ and $H$ differ only in the single ciphertext at position $i$: $\mathrm{Enc
 Symmetrically, $H$ and $Q_j$ differ only in the single ciphertext at position $j$, giving an IND-CPA adversary $B_2$ with advantage $\epsilon_2$ equal to $A$'s advantage distinguishing $H$ from $Q_j$.
 
 By the triangle inequality,
-\[
-\bigl|\Pr[A(Q_i){=}1]-\Pr[A(Q_j){=}1]\bigr| \le \epsilon_1+\epsilon_2 \le 2\max(\mathrm{Adv}_{B_1},\mathrm{Adv}_{B_2}) = 2\,\mathrm{Adv}_{\text{IND-CPA}}(B),
-\]
+\begin{align*}
+\bigl|\Pr[A(Q_i){=}1]-\Pr[A(Q_j){=}1]\bigr| &\le \epsilon_1+\epsilon_2 \\
+&\le 2\max(\mathrm{Adv}_{B_1},\mathrm{Adv}_{B_2}) \\
+&= 2\,\mathrm{Adv}_{\text{IND-CPA}}(B),
+\end{align*}
 taking $B$ to be whichever of $B_1,B_2$ has the larger advantage. Since $\mathrm{Adv}_{\text{IND-CPA}}$ is negligible under the DCR assumption (Paillier's standard security reduction), the left-hand side is negligible.
 \end{proof}
 
@@ -49,7 +51,10 @@ taking $B$ to be whichever of $B_1,B_2$ has the larger advantage. Since $\mathrm
 \textbf{Setup.} A batch has $N$ slots; the auditor checks a uniformly random $P$-subset. An adversary, before learning which slots will be checked, tampers with some $m$-subset chosen independently of the auditor's random draw.
 
 \begin{theorem}
-$\displaystyle \Pr[\text{checked }P\text{-subset disjoint from tampered }m\text{-subset}] = \binom{N-m}{P}\Big/\binom{N}{P}.$
+Writing $Q$ for the auditor's checked $P$-subset and $T$ for the adversary's tampered $m$-subset,
+\[
+\Pr[Q \cap T = \emptyset] = \binom{N-m}{P}\Big/\binom{N}{P}.
+\]
 \end{theorem}
 
 \begin{proof}

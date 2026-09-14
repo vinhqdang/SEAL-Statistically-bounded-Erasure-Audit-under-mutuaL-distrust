@@ -389,7 +389,7 @@ Calibrated, exact Student-$t$ & 0.333 & 0.667 \\
 
 Each fix moves both numbers in the direction the corresponding theorem predicts \emph{before} it was run: an exact threshold cannot manufacture confidence a small calibration sample does not support, so tightening the threshold to be exact, and then to be correctly composed across channels, necessarily costs detection power as it removes false accusations.
 
-Table~\ref{tab:llmfull} reports the final, Bonferroni-corrected certificate's detection rate against all four server behaviors, together with the diversity channel's rate in isolation and the resource-bounded adversary's analytic evasion prediction. The partial-topic-filter adversary's empirical detection rate (0.333) is consistent with the exact analytic hypergeometric prediction (Theorem~\ref{thm:hypergeom}: $1-0.6=0.4$, for $R{=}5$ paraphrase templates and $m{=}3$ guessed) within this trial count's sampling noise -- the one place in this evaluation where a component is checked against a closed-form formula rather than only Monte Carlo. The WaterDrum-comparison result (Section~\ref{sec:waterdrum-comparison}, Table~\ref{tab:waterdrum}) is drawn from this same final run.
+Table~\ref{tab:llmfull} reports the final, Bonferroni-corrected certificate's detection rate against all four server behaviors, together with the diversity channel's rate in isolation and the resource-bounded adversary's analytic evasion prediction. The partial-topic-filter adversary guesses $m=2$ of the $R=5$ paraphrase templates (a guess fraction of $0.5$, rounded half-to-even by Python's \texttt{round}, so $0.5\times5=2.5$ rounds to the even integer $2$, not $3$); the resulting empirical detection rate (0.333) is consistent with the exact analytic hypergeometric prediction (Theorem~\ref{thm:hypergeom}: $1 - (R-m)/R = 1 - 3/5 = 0.4$) within this trial count's sampling noise -- the one place in this evaluation where a component is checked against a closed-form formula rather than only Monte Carlo. The WaterDrum-comparison result (Section~\ref{sec:waterdrum-comparison}, Table~\ref{tab:waterdrum}) is drawn from this same final run.
 
 \begin{table}[t]
 \centering
@@ -415,26 +415,37 @@ This 3-trial, $N_{\text{calib}}{=}2$ regime is small by design: each trial fine-
 
 \subsection{Implementation and Reproducibility}
 
-Every mechanism, channel, and adversary discussed above is implemented, not simulated: the federated softmax model and both classical-track channels are pure-Python/NumPy; the LLM track fine-tunes a real \texttt{distilgpt2} checkpoint via PyTorch/Hugging Face Transformers; the watermark is the published green-list construction \cite{kirchenbauer2023watermark}, not a proxy for it; and SEAL-W's PIR is a real Paillier implementation (the \texttt{phe} library), with the auditor's queries genuinely encrypted end-to-end rather than the obliviousness property being asserted without a corresponding cryptographic artifact. All four adversary mechanisms (lazy, filter-only, topic-filter, partial-topic-filter) share identical underlying model weights within each experiment -- a single ``kept training on everything, never actually unlearned'' fine-tune -- differing only in the output-filtering wrapper placed over it, so that the comparison isolates what each certificate channel can detect rather than accidentally comparing different models. The full implementation, experiment scripts, and raw per-trial result files are available at \url{https://github.com/vinhqdang/SEAL-Statistically-bounded-Erasure-Audit-under-mutuaL-distrust}; the paper's numbered theorem statements are additionally restated with complete, checkable proofs in the supplemental material. Table~\ref{tab:hyperparams} lists every hyperparameter needed to reproduce the numbers in this section exactly.
+Every mechanism, channel, and adversary discussed above is implemented, not simulated: the federated softmax model and both classical-track channels are pure-Python/NumPy; the LLM track fine-tunes a real \texttt{distilgpt2} checkpoint via PyTorch/Hugging Face Transformers; the watermark is the published green-list construction \cite{kirchenbauer2023watermark}, not a proxy for it; and SEAL-W's PIR is a real Paillier implementation (the \texttt{phe} library), with the auditor's queries genuinely encrypted end-to-end rather than the obliviousness property being asserted without a corresponding cryptographic artifact. All four adversary mechanisms (lazy, filter-only, topic-filter, partial-topic-filter) share identical underlying model weights within each experiment -- a single ``kept training on everything, never actually unlearned'' fine-tune -- differing only in the output-filtering wrapper placed over it, so that the comparison isolates what each certificate channel can detect rather than accidentally comparing different models. The full implementation, experiment scripts, and raw per-trial result files are available at \url{https://github.com/vinhqdang/SEAL-Statistically-bounded-Erasure-Audit-under-mutuaL-distrust}; the paper's numbered theorem statements are additionally restated with complete, checkable proofs in the supplemental material. Tables~\ref{tab:hyperparams-classical}--\ref{tab:hyperparams-llm} list every hyperparameter needed to reproduce the numbers in this section exactly, including per-dataset values that differ across the classical-track sweep.
 
 \begin{table}[t]
 \centering
 \footnotesize
-\caption{Hyperparameters used in Section~\ref{sec:experiments} (defaults in code, not tuned per dataset unless noted).}
-\label{tab:hyperparams}
-\begin{tabular}{@{}p{0.44\linewidth}p{0.44\linewidth}@{}}
+\caption{Classical-track (SEAL) hyperparameters, exact per dataset, sufficient to reproduce every number in Tables~\ref{tab:classical}--\ref{tab:spoof}.}
+\label{tab:hyperparams-classical}
+\begin{tabular}{@{}lccc@{}}
 \toprule
-\multicolumn{2}{@{}l}{\emph{Classical track (SEAL)}} \\
+Parameter & German Credit & MNIST & Covertype \\
 \midrule
-Clients & 5 \\
-FedAvg rounds (train / unlearn) & 15--20 / 6--8 \\
-Local epochs, learning rate, batch & 1, 0.3, 32 \\
-Calibration replicates $R$ & 25 (German Credit), 15 (MNIST), 12 (Covertype) \\
-Probe count $B$, jitter scale & 30, 0.3 \\
-$\beta_{\text{target}}$ & 0.05 (German Credit/MNIST), per-channel Bonferroni split \\
-\midrule
-\multicolumn{2}{@{}l}{\emph{LLM track (SEAL-W)}} \\
-\midrule
+Clients & 5 & 5 & 5 \\
+FedAvg rounds (train) & 25 & 20 & 20 \\
+Unlearn extra rounds & 8 & 6 & 6 \\
+Local epochs, lr & 1, 0.3 & 1, 0.3 & 1, 0.3 \\
+Batch size & 32 & 64 & 512 \\
+Calibration replicates $R$ & 25 & 15 & 12 \\
+Probe count $B$, jitter & 50, 0.4 & 50, 0.05 & 50, 0.3 \\
+Monte-Carlo trials & 20 & 12 & 10 \\
+$\beta_{\text{target}}$ & 0.05 & 0.05 & 0.05 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{LLM-track (SEAL-W) hyperparameters, sufficient to reproduce every number in Tables~\ref{tab:llmprogression}--\ref{tab:llmfull}.}
+\label{tab:hyperparams-llm}
+\begin{tabular}{@{}p{0.5\linewidth}p{0.38\linewidth}@{}}
+\toprule
 Base model & \texttt{distilgpt2} (82M params, CPU-only) \\
 Fine-tune epochs, lr, doc repeats & 3, $5{\times}10^{-5}$, 8 \\
 Watermark $\gamma$ (green fraction), $\delta$ (logit bias) & 0.5, 8.0 \\

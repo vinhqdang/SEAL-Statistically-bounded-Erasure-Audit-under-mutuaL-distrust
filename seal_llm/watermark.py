@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+_DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 def green_mask(prev_token_id: int, key: int, vocab_size: int, gamma: float) -> np.ndarray:
     """Deterministic, key-and-context-seeded green/red partition of the
@@ -33,7 +35,7 @@ def green_mask(prev_token_id: int, key: int, vocab_size: int, gamma: float) -> n
 def generate_watermarked(
     model, tokenizer, prompt: str, key: int,
     gamma: float = 0.5, delta: float = 6.0, max_new_tokens: int = 40,
-    seed: int = 0, device: str = "cpu",
+    seed: int = 0, device: str = _DEFAULT_DEVICE,
 ) -> str:
     """Generate a continuation of `prompt` with green-list logit bias keyed
     by `key`. This is how a data owner's contribution gets watermarked

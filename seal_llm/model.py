@@ -1,5 +1,8 @@
 """Fine-tuning and generation utilities around a small causal LM
-(distilgpt2 by default -- CPU-tractable for a full experiment sweep)."""
+(distilgpt2 by default -- CPU-tractable for a full experiment sweep).
+Runs on CUDA automatically when available (same arithmetic, just
+accelerated); falls back to CPU otherwise so existing CPU-only runs are
+unaffected."""
 from __future__ import annotations
 
 import copy
@@ -7,11 +10,13 @@ import copy
 import torch
 from transformers import GPT2LMHeadModel, GPT2TokenizerFast
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def load_base(model_name: str = "distilgpt2"):
     tokenizer = GPT2TokenizerFast.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
-    model = GPT2LMHeadModel.from_pretrained(model_name)
+    model = GPT2LMHeadModel.from_pretrained(model_name).to(DEVICE)
     model.eval()
     return model, tokenizer
 
@@ -28,7 +33,7 @@ def finetune(model, tokenizer, texts: list, epochs: int = 2, lr: float = 5e-5, s
     torch.manual_seed(seed)
     model.train()
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    encodings = [tokenizer(t, return_tensors="pt").input_ids for t in texts]
+    encodings = [tokenizer(t, return_tensors="pt").input_ids.to(DEVICE) for t in texts]
     for _ in range(epochs):
         for ids in encodings:
             if ids.shape[1] < 2:
@@ -52,7 +57,7 @@ def plain_generate(model, tokenizer, prompt: str, max_new_tokens: int = 30, min_
     if min_new_tokens is None:
         min_new_tokens = max_new_tokens
     torch.manual_seed(seed)
-    ids = tokenizer(prompt, return_tensors="pt").input_ids
+    ids = tokenizer(prompt, return_tensors="pt").input_ids.to(DEVICE)
     out = model.generate(
         ids, max_new_tokens=max_new_tokens, min_new_tokens=min_new_tokens,
         do_sample=True, temperature=1.0, pad_token_id=tokenizer.eos_token_id,

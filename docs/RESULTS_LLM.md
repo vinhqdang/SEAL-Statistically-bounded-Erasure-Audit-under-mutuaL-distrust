@@ -4,7 +4,7 @@
 $n_{\text{trials}}=30$ rerun of the final certificate version, with the
 calibration budget itself raised from $N_{\text{calib}}=2$ to
 $N_{\text{calib}}=6$ (Tables `tab:llmfull` and `tab:waterdrum` in
-`paper/main.tex`; raw data in `results/llm_watermark_raw.csv`). Two
+`paper/manuscript_SEAL.tex`; raw data in `results/llm_watermark_raw.csv`). Two
 things changed independently: more trials narrowed the confidence
 intervals, and more calibration replicates raised real detection power
 (0.100 -> 0.933 against `topic_filter`) at no cost to the

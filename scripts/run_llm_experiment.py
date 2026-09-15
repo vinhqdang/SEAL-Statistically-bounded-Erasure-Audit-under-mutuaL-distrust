@@ -41,15 +41,26 @@ DELTA = 8.0
 # the certificate into flagging everything regardless of the true
 # mechanism -- see docs/RESULTS_LLM.md for that failure mode measured
 # directly, rather than only asserted here.
-N_AUTHORS_PER_TRIAL = 5     # subsampled from AUTHOR_NAMES each trial: 1 forget + N_CALIB_AUTHORS calib + >=2 retained
+N_AUTHORS_PER_TRIAL = 9     # subsampled from AUTHOR_NAMES each trial: 1 forget + N_CALIB_AUTHORS calib + >=2 retained
 N_DOCS = 4
 DOC_REPEATS = 8
 FT_EPOCHS = 3
 FT_LR = 5e-5
 GEN_MAX_NEW_TOKENS = 30
 BETA_TARGET = 0.10
-N_CALIB_AUTHORS = 2  # needs >=2 for a defined sample std (ddof=1) in the null
-N_DECOYS = 2         # reduced from the validated-signal reference config to keep wall-clock time reasonable on this CPU-only box
+# Bumped from N_CALIB_AUTHORS=2 (the bare minimum for a defined sample std)
+# once GPU acceleration made the extra fine-tune replicates affordable: this
+# paper's own central diagnosis (Section 6.1.1) and the classical-track
+# ablation (Table tab:calibablation) both show N_calib=2 produces an
+# unstable, occasionally wildly-oversized threshold (Theorem 3's exact
+# Student-t correction has only 1 degree of freedom there) that suppresses
+# genuine detection power -- not a claim that the certificate mechanism
+# itself is broken. N_CALIB_AUTHORS=6 (5 degrees of freedom) is the
+# principled fix the paper already argues for, applied here rather than
+# only argued for elsewhere; it requires N_AUTHORS_PER_TRIAL=9 to leave
+# room for >=2 retained authors from the 10-name AUTHOR_NAMES pool.
+N_CALIB_AUTHORS = 6
+N_DECOYS = 2         # reduced from the validated-signal reference config to keep wall-clock time reasonable
 # Both clusters use the FULL paraphrase-template pool (rather than a random
 # subset of it) so the analytic hypergeometric prediction below (N = pool
 # size, exactly one slot checked, m = guessed templates) matches what

@@ -1,0 +1,31 @@
+\documentclass[11pt]{letter}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{xurl}
+\sloppy
+
+\signature{Quang-Vinh Dang}
+\address{British University Vietnam \\ Hung Yen, Vietnam \\ vinh.dq4@buv.edu.vn}
+
+\begin{document}
+
+\begin{letter}{Editor-in-Chief \\ IEEE Transactions on Information Forensics and Security}
+
+\opening{Dear Editor-in-Chief,}
+
+I am submitting the manuscript titled \textbf{``SEAL: Statistically-Bounded Erasure Audits for Machine Unlearning under Mutual Distrust''} for consideration as a regular paper in IEEE Transactions on Information Forensics and Security.
+
+The manuscript addresses a practical gap in machine unlearning: a data owner who submits an erasure request has no direct way to verify that a model operator actually complied, and prior work (Tang et al.; Nguyen et al.'s veriFUL survey) characterizes why this is fundamentally hard without providing a runnable mechanism. This paper presents SEAL and SEAL-W, two calibrated, formally-scoped audit certificates -- one for federated classical machine learning, one for large language models verified via watermarking and private information retrieval -- that let a mutually distrusting data owner and operator resolve this question with a stated, controllable privacy cost.
+
+The contribution is explicitly one of composition and precise scoping rather than new theory: five formal results (four theorems and a proposition) apply standard tools -- an IND-CPA reduction, a hypergeometric evasion bound, an exact Student-$t$ predictive threshold, and Boole's inequality -- to this certificate's specific channels. We reproduce WaterDrum's verification methodology as an explicit experimental baseline and show it is defeated by a server that filters the audit query itself, the exact gap WaterDrum's own authors report as unsolved; SEAL-W's independent diversity channel closes this gap. We report this result, and every other empirical claim in the paper, alongside the calibration-budget sweep and failure modes (at large per-client data scale, and at small calibration-sample size) that produced it, rather than only the most favorable configuration.
+
+We believe this work is a good fit for IEEE TIFS given its focus on differential privacy, private information retrieval, watermarking, and adversarial threat modeling for a concrete forensic/audit problem. Full implementation, experiment scripts, and raw per-trial result files accompany this submission and are also available at \url{https://github.com/vinhqdang/SEAL-Statistically-bounded-Erasure-Audit-under-mutuaL-distrust}.
+
+This manuscript is not currently under review elsewhere, and the author declares no conflicts of interest with this submission. \emph{[Author: please confirm both statements are accurate before submitting -- I cannot verify your submission history or conflicts on your behalf.]}
+
+Thank you for your consideration.
+
+\closing{Sincerely,}
+
+\end{letter}
+\end{document}
